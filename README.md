@@ -36,6 +36,7 @@ Credits
   - Fake multiplayer flag
 - **[EJ](https://github.com/11EJDE11)**
   - Whole lot of desync fixes
+  - Event verification checks
 - **[ZivDero](https://github.com/ZivDero)**
   - Handicaps (difficulty & credits) support
 - **[Starkku](https://github.com/Starkku)**
