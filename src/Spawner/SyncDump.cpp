@@ -159,6 +159,10 @@ void SyncDump::PerFrame()
 
 			lastComputedFrame = currentFrame;
 			Game::ComputeFrameCRC();
+			// Mirror the network path's history stamp (0x6476A5) so the
+			// dump's CRC[] table carries the per-frame CRC values; inert
+			// otherwise (only the desync detector reads it, on peer events).
+			EventClass::LatestFramesCRC[slot] = EventClass::CurrentFrameCRC;
 
 			if (SlotLoggedFrame(slot) != frame)
 				continue;
