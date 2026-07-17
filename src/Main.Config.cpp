@@ -18,6 +18,7 @@
 */
 
 #include "Main.Config.h"
+#include <Spawner/SyncDump.h>
 #include <Utilities/Macro.h>
 
 #include <CCINIClass.h>
@@ -42,6 +43,8 @@ void MainConfig::LoadFromINIFile()
 		this->SingleProcAffinity   = pINI->ReadBool(pOptionsSection, "SingleProcAffinity", this->SingleProcAffinity);
 		this->SkipScoreScreen      = pINI->ReadBool(pOptionsSection, "SkipScoreScreen", this->SkipScoreScreen);
 		this->SpeedControl         = pINI->ReadBool(pOptionsSection, "SpeedControl", this->SpeedControl);
+		this->SyncDump             = pINI->ReadBool(pOptionsSection, "SYNCDUMP", this->SyncDump);
+		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
 	}
 
 	const char* pVideoSection = "Video";
@@ -71,6 +74,15 @@ void MainConfig::ApplyStaticOptions()
 		Patch::Apply_TYPED<DWORD>(0x542CF7, { 372 });
 		Patch::Apply_TYPED<DWORD>(0x542D5E, { 382 });
 		Patch::Apply_TYPED<DWORD>(0x542DC2, { 392 });
+	}
+
+	if (this->SyncDump)
+	{
+		// Arm the retail per-frame sync recording (Game::LogFrameCRC) even if
+		// MPDEBUG is off; the dump hook itself lives in Spawner/SyncDump.cpp.
+		Game::EnableMPSyncDebug = true;
+		SyncDump::Enable = true;
+		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
 	}
 
 	if (this->SingleProcAffinity)

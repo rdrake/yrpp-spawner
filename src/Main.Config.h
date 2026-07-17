@@ -31,6 +31,8 @@ public:
 	bool SingleProcAffinity;
 	bool SkipScoreScreen;
 	bool SpeedControl;
+	bool SyncDump;
+	int SyncDumpMaxFrames;
 
 	// Video
 	bool NoWindowFrame;
@@ -53,6 +55,8 @@ public:
 		, SingleProcAffinity { true }
 		, SkipScoreScreen { false }
 		, SpeedControl { false }
+		, SyncDump { false }
+		, SyncDumpMaxFrames { 5000 }
 
 		// Video
 		, DDrawTargetFPS { -1 }
