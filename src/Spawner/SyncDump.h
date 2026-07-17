@@ -29,6 +29,7 @@ class SyncDump
 {
 public:
 	static bool Enable;
+	static bool ComputeCRC;
 	static int MaxFrames;
 
 	static void PerFrame();

@@ -32,6 +32,7 @@ public:
 	bool SkipScoreScreen;
 	bool SpeedControl;
 	bool SyncDump;
+	bool SyncDumpComputeCRC;
 	int SyncDumpMaxFrames;
 
 	// Video
@@ -56,6 +57,7 @@ public:
 		, SkipScoreScreen { false }
 		, SpeedControl { false }
 		, SyncDump { false }
+		, SyncDumpComputeCRC { true }
 		, SyncDumpMaxFrames { 5000 }
 
 		// Video

@@ -29,6 +29,7 @@
 #include <cstdio>
 
 bool SyncDump::Enable = false;
+bool SyncDump::ComputeCRC = true;
 int SyncDump::MaxFrames = 5000;
 
 namespace
@@ -43,6 +44,7 @@ namespace
 	constexpr char DumpDir[] = "SYNCDUMP";
 
 	int lastDumpedFrame = 0;
+	int lastComputedFrame = 0;
 	int dumpedCount = 0;
 	bool sessionInitialized = false;
 
@@ -94,8 +96,8 @@ namespace
 			fclose(pFile);
 		}
 
-		Debug::Log("[SyncDump] Armed: Seed=%08X StartFrame=%d MaxFrames=%d\n",
-			Game::Seed, Unsorted::CurrentFrame, SyncDump::MaxFrames);
+		Debug::Log("[SyncDump] Armed: Seed=%08X StartFrame=%d MaxFrames=%d ComputeCRC=%d\n",
+			Game::Seed, Unsorted::CurrentFrame, SyncDump::MaxFrames, SyncDump::ComputeCRC);
 	}
 }
 
@@ -112,6 +114,7 @@ void SyncDump::PerFrame()
 	{
 		// A new game started within the same process.
 		lastDumpedFrame = 0;
+		lastComputedFrame = 0;
 		dumpedCount = 0;
 		sessionInitialized = false;
 	}
@@ -140,7 +143,26 @@ void SyncDump::PerFrame()
 
 		const int slot = frame % FrameLogSlots;
 		if (SlotLoggedFrame(slot) != frame)
-			continue;
+		{
+			// Skirmish (GameMode 5) never reaches either retail
+			// ComputeFrameCRC call site (0x647684 is network-only, 0x64731C
+			// attract-only), so compute it here — mirroring what the attract
+			// periodic dump does each frame. Only for the current frame (past
+			// frames cannot be recomputed), at most once per logic frame, and
+			// only when the engine has not already logged the slot, so
+			// networked sessions are unaffected. Each compute consumes two
+			// Randomizer draws (one folded by ComputeFrameCRC, one drawn by
+			// LogFrameCRC) — deterministic, end-of-frame, part of the traced
+			// run's contract.
+			if (!ComputeCRC || frame != currentFrame || lastComputedFrame == currentFrame)
+				continue;
+
+			lastComputedFrame = currentFrame;
+			Game::ComputeFrameCRC();
+
+			if (SlotLoggedFrame(slot) != frame)
+				continue;
+		}
 
 		EventClass::Print_CRCs_All_Players(slot, nullptr);
 		CollectSyncFiles("F", frame);

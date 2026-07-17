@@ -44,6 +44,7 @@ void MainConfig::LoadFromINIFile()
 		this->SkipScoreScreen      = pINI->ReadBool(pOptionsSection, "SkipScoreScreen", this->SkipScoreScreen);
 		this->SpeedControl         = pINI->ReadBool(pOptionsSection, "SpeedControl", this->SpeedControl);
 		this->SyncDump             = pINI->ReadBool(pOptionsSection, "SYNCDUMP", this->SyncDump);
+		this->SyncDumpComputeCRC   = pINI->ReadBool(pOptionsSection, "SYNCDUMP.ComputeCRC", this->SyncDumpComputeCRC);
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
 	}
 
@@ -82,6 +83,7 @@ void MainConfig::ApplyStaticOptions()
 		// MPDEBUG is off; the dump hook itself lives in Spawner/SyncDump.cpp.
 		Game::EnableMPSyncDebug = true;
 		SyncDump::Enable = true;
+		SyncDump::ComputeCRC = this->SyncDumpComputeCRC;
 		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
 	}
 
