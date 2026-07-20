@@ -637,8 +637,8 @@ DEFINE_HOOK(0x42A40F, AStarClass_CoreSearch_AstarDumpRawCodes, 0x6)
 	int codeCount = nodeCount - 1;
 	if (codeCount < 0)
 		codeCount = 0;
-	if (codeCount > MaxRawCodes)
-		codeCount = MaxRawCodes; // never over-read past the capped copy
+	if (codeCount > AstarDump::MaxRawCodes)
+		codeCount = AstarDump::MaxRawCodes; // never over-read past the capped copy
 
 	if (buffer)
 	{
