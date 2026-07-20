@@ -51,12 +51,14 @@ namespace
 	AstarDump::Record* currentRecord = nullptr;
 
 	// Pending per-attempt corridor-activation flag, captured at each
-	// core-search entry (FUN_00429A90 param_7). The brief wants the SUCCESSFUL
-	// attempt's corridor state promoted to the record; without the FindPath
-	// exit hook (Task 11) there is no reliable success signal at this layer, so
-	// this task records the LAST attempt's state (each entry overwrites it and
-	// the record's CorridorActive/COARSE_PATH) and leaves the promotion of the
-	// successful attempt to Task 11, which can read this pending value.
+	// core-search entry (FUN_00429A90 param_7). Each attempt overwrites it (and
+	// the record's CorridorActive/COARSE_PATH) with the LAST attempt's state.
+	// Task 11's FindPath-exit hooks (below) promote this to the record's final
+	// CorridorActive exactly once, at return: since FindPath returns as soon as
+	// a core-search attempt succeeds (no further retries follow a success),
+	// "last attempt" and "successful attempt" coincide for a successful search;
+	// for a failed search there is no successful attempt to prefer, so the
+	// last-tried state is kept as the most meaningful value available.
 	bool pendingCorridorActive = false;
 }
 
@@ -68,10 +70,12 @@ AstarDump::Record* AstarDump::Arm(int frame, uint32_t unitId, int startX, int st
 
 	if (recordCount >= MaxRecords)
 	{
-		// Record-buffer-full drops silently in Task 7, matching the section
-		// appenders (AppendRawCode/AppendCoarsePathId/AppendCostGridCell). The
-		// logged overflow marker is Task 11's scope, so all drop paths stay
-		// consistent until then.
+		// Task 11: record-buffer-full is a rare, low-frequency event (at most
+		// once per FindPath call while all MaxRecords slots are InUse), so it's
+		// safe to log unconditionally - no anti-spam flag needed here, unlike
+		// the section appenders below.
+		Debug::Log("[AstarDump] dropped (buffer full): record buffer full (%d armed), frame=%d unit=0x%08x\n",
+			MaxRecords, frame, unitId);
 		return nullptr;
 	}
 
@@ -118,7 +122,19 @@ void AstarDump::AppendRawCode(Record* record, int code)
 		return;
 
 	if (record->RawCodesCount >= MaxRawCodes)
+	{
+		// Task 11: log once per record (see Record::RawCodesOverflowLogged);
+		// RAW_CODES can refill multiple times per FindPath (one per
+		// reconstruction), so this can still legitimately fire more than once
+		// across a record's lifetime, just not thousands of times per fire.
+		if (!record->RawCodesOverflowLogged)
+		{
+			Debug::Log("[AstarDump] dropped (buffer full): RAW_CODES capped at %d for unit 0x%08x\n",
+				MaxRawCodes, record->UnitId);
+			record->RawCodesOverflowLogged = true;
+		}
 		return;
+	}
 
 	record->RawCodes[record->RawCodesCount++] = code;
 }
@@ -129,7 +145,15 @@ void AstarDump::AppendCoarsePathId(Record* record, int cellId)
 		return;
 
 	if (record->CoarsePathCount >= MaxCoarsePathIds)
+	{
+		if (!record->CoarsePathOverflowLogged)
+		{
+			Debug::Log("[AstarDump] dropped (buffer full): COARSE_PATH capped at %d for unit 0x%08x\n",
+				MaxCoarsePathIds, record->UnitId);
+			record->CoarsePathOverflowLogged = true;
+		}
 		return;
+	}
 
 	record->CoarsePath[record->CoarsePathCount++] = cellId;
 }
@@ -140,7 +164,18 @@ void AstarDump::AppendCostGridCell(Record* record, int x, int y, int cost, int f
 		return;
 
 	if (record->CostGridCount >= MaxCostGridCells)
+	{
+		// Fires per-neighbor once the cap is hit (thousands of times/search
+		// without the anti-spam flag) - this is exactly the "if cheap" case the
+		// per-record bool exists for.
+		if (!record->CostGridOverflowLogged)
+		{
+			Debug::Log("[AstarDump] dropped (buffer full): COSTGRID capped at %d for unit 0x%08x\n",
+				MaxCostGridCells, record->UnitId);
+			record->CostGridOverflowLogged = true;
+		}
 		return;
+	}
 
 	CostGridCell& cell = record->CostGrid[record->CostGridCount++];
 	cell.X = x;
@@ -412,6 +447,14 @@ DEFINE_HOOK(0x429A90, AStarClass_CoreSearch_AstarDumpAttempt, 0x5)
 		coarseCount = 0;
 	if (coarseCount > 500)
 		coarseCount = 500; // per-level physical cap (500 u16 entries/level)
+	// Task 11 fix: MaxCoarsePathIds (256) is the actual storage cap - smaller
+	// than the 500-entry physical buffer bound above. Clamping only the append
+	// (not the loop) meant ids 256..499 were read and individually dropped by
+	// AppendCoarsePathId every attempt; clamp the loop bound itself instead so
+	// nothing past the real cap is read or iterated over. Pure bound fix: no
+	// behavior change for coarseCount <= MaxCoarsePathIds.
+	if (coarseCount > AstarDump::MaxCoarsePathIds)
+		coarseCount = AstarDump::MaxCoarsePathIds;
 
 	const unsigned short* coarse = reinterpret_cast<const unsigned short*>(astar + 0xbc);
 	for (int i = 0; i < coarseCount; ++i)
@@ -565,3 +608,208 @@ DEFINE_HOOK(0x42A40F, AStarClass_CoreSearch_AstarDumpRawCodes, 0x6)
 
 	return 0;
 }
+
+namespace
+{
+	// Task 11 finalization, shared by both FindPath-exit hook sites below.
+	// Precondition: AstarDump::Enable is true and AstarDump::Current() is
+	// non-null (both hook bodies check this before calling in).
+	void FinalizeAndFlushCurrent()
+	{
+		AstarDump::Record* record = AstarDump::Current();
+
+		// Promote the staged per-attempt corridor state (Task 9's
+		// pendingCorridorActive, last written by whichever core-search attempt
+		// ran most recently) to the record. For a successful search, the LAST
+		// attempt IS the successful one - FindPath returns as soon as a
+		// core-search attempt (FUN_00429A90) succeeds, with no further retries
+		// after that, so "last attempt" and "successful attempt" coincide here.
+		// For a failed search there is no successful attempt to prefer, so the
+		// last-tried corridor state is still the most meaningful value to keep.
+		record->CorridorActive = pendingCorridorActive;
+
+		// RESULT finalization: the RAW_CODES hook (0x42A40F) only fires when
+		// FUN_0042aa90's reconstruction actually runs, which only happens for a
+		// successful core-search attempt. If Result is still "pending" here,
+		// FindPath returned without ever reaching that hook - i.e. every
+		// attempt failed (or none ran) - so the search result is "none". If
+		// RESULT is already "ok", leave it: RAW_CODES already fired and filled
+		// the record.
+		if (std::strcmp(record->Result, "pending") == 0)
+			std::strncpy(record->Result, "none", sizeof(record->Result) - 1);
+
+		// Flush() is the module's ONLY disk-write trigger (see WriteRecord/
+		// Flush above - grep confirms no other call site in this file invokes
+		// Flush()): writing here, exactly once per FindPath return, guarantees
+		// nothing is written to disk mid-search. Flush() also calls Reset(),
+		// which already clears currentRecord/pendingCorridorActive, so the
+		// explicit ClearCurrent() below is technically redundant with Reset()
+		// but is kept as the documented, task-mandated exit-hook contract (and
+		// stays correct if a future change makes Flush() skip Reset() on an
+		// empty buffer, or skip clearing Current() specifically).
+		AstarDump::Flush();
+		AstarDump::ClearCurrent();
+	}
+}
+
+// AStarClass::FindPath exit, early-out path (VA 0x42CB36..0x42CB3F; see
+// docs/superpowers/notes/astardump-offsets.md "FindPath exit/return sites").
+// This is the zone-type-mismatch `return NULL` (decompile line 117) - a FAILED
+// search that does NOT fall through to the function's shared epilogue; it has
+// its own physical `ret 0x1c` and must be hooked independently of the
+// fall-through exit below.
+//
+// Capstone-verified linear disasm from 0x42cb36 (re-confirmed against the
+// note, same run used to pin FindPath's stack ABI):
+//   0x42cb36: pop edi        5f
+//   0x42cb37: pop esi        5e
+//   0x42cb38: pop ebp        5d
+//   0x42cb39: xor eax,eax    33c0
+//   0x42cb3b: pop ebx        5b
+//   0x42cb3c: add esp,0x20   83c420
+//   0x42cb3f: ret 0x1c       c21c00
+// Patched byte count (0x5) ends on an instruction boundary: pop edi (1) + pop
+// esi (1) + pop ebp (1) + xor eax,eax (2) = 5 bytes, landing exactly at
+// 0x42cb3b (before `pop ebx`). Syringe re-executes these 5 patched bytes after
+// the hook body returns, so all four instructions (including the
+// caller-invisible `xor eax,eax` that produces this path's NULL return value)
+// still run normally, followed by the untouched `pop ebx; add esp,0x20; ret
+// 0x1c`. The hook body touches no register/flag this epilogue depends on, so
+// this is safe regardless of where exactly inside the 5 bytes it's placed.
+//
+// No FindPath registers are read here (by design - see work item 1): the hook
+// operates purely on AstarDump's own module state via Current(), which is
+// valid for exactly the FindPath call currently unwinding, independent of
+// which registers that call's own epilogue is mid-way through restoring.
+DEFINE_HOOK(0x42CB36, AStarClass_FindPath_AstarDumpExitEarly, 0x5)
+{
+	if (!AstarDump::Enable)
+		return 0;
+
+	if (!AstarDump::Current())
+		return 0;
+
+	FinalizeAndFlushCurrent();
+
+	return 0;
+}
+
+// AStarClass::FindPath exit, shared/fall-through epilogue (VA
+// 0x42CCC4..0x42CCCB; see astardump-offsets.md). This is the function's single
+// physical `ret 0x1c` reached by every OTHER return in FindPath (decompile
+// lines 149/153/156, both the "search succeeded" and "search exhausted every
+// corridor level and gave up" paths converge here via jumps/fallthrough) - it
+// is a separate site from the early-out above, which never reaches this
+// epilogue.
+//
+// Capstone-verified linear disasm from 0x42ccc4 (same continuous run as
+// above, per the note):
+//   0x42ccc4: pop edi        5f
+//   0x42ccc5: pop esi        5e
+//   0x42ccc6: pop ebp        5d
+//   0x42ccc7: pop ebx        5b
+//   0x42ccc8: add esp,0x20   83c420
+//   0x42cccb: ret 0x1c       c21c00
+// Patched byte count (0x7) ends on an instruction boundary: pop edi (1) + pop
+// esi (1) + pop ebp (1) + pop ebx (1) + add esp,0x20 (3) = 7 bytes, landing
+// exactly at 0x42cccb (the bare `ret 0x1c` itself, left untouched). A 5-byte
+// patch would end mid-`add esp,0x20` (at cumulative offset 4, one byte short
+// of that 3-byte instruction's boundary at 7), so 7 is the smallest hookable
+// size that both fits the 5-byte jmp and lands cleanly - matching the note's
+// "more bytes than the bare 3-byte ret" guidance. All five original
+// instructions re-execute after the hook body returns, unaffected by it.
+//
+// Like the early-out hook, no FindPath registers are read; only the module's
+// own Current()/pendingCorridorActive/record state is touched.
+DEFINE_HOOK(0x42CCC4, AStarClass_FindPath_AstarDumpExitNormal, 0x7)
+{
+	if (!AstarDump::Enable)
+		return 0;
+
+	if (!AstarDump::Current())
+		return 0;
+
+	FinalizeAndFlushCurrent();
+
+	return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Task 11 read-only audit (work item 4)
+//
+// This enumerates EVERY read the module's five engine hooks perform, to
+// confirm the Global Constraint (direct field/register reads only; no virtual
+// getter re-invoked for data; no RNG; no game-state writes) holds for the
+// whole module, not just the hook it was originally documented in.
+//
+// AStarClass_FindPath_AstarDumpEntry (0x42C900):
+//   - GET_STACK reads of the CALL's own pushed args: pStart [esp+0x4]
+//     (CellStruct*), pDest [esp+0x8] (CellStruct*), pFoot [esp+0xc]
+//     (FootClass*). Plain stack reads, no indirection through a vtable.
+//   - pStart->X, pStart->Y, pDest->X, pDest->Y: direct CellStruct field
+//     reads (POD struct, no accessor).
+//   - pFoot->WhatAmI(): virtual call, but a pure RTTI/AbstractType query -
+//     returns a compile-time-fixed enum tag per class, touches no simulation
+//     state, and is not "data" in the sense the constraint means (it's the
+//     same value every time for a given C++ class, computed with no reads of
+//     mutable object state).
+//   - pFoot->GetType(): virtual call, but ObjectClass::GetType() is a pure
+//     accessor returning the object's (immutable, set-once-at-construction)
+//     TechnoTypeClass*/UnitTypeClass* pointer - not a "getter that computes
+//     over live data", just a stored-pointer accessor with no side effects.
+//   - pType->Harvester, pType->SpeedType: direct field reads on the returned
+//     UnitTypeClass* (rules-data, immutable at runtime).
+//   - pFoot->UniqueID: direct field read.
+//   - Unsorted::CurrentFrame: direct global read (existing SyncDump-adjacent
+//     convention, not gated by this module).
+//   No writes anywhere in this hook except the module's own AstarDump::Arm()
+//   internal state and AstarDump::ClearCurrent().
+//
+// AStarClass_CoreSearch_AstarDumpAttempt (0x429A90):
+//   - GET_STACK corridorActiveByte [esp+0x18]: plain stack read (param_7).
+//   - R->ECX (AStarClass* this): plain register read.
+//   - *(astar + 0xc74) (coarse-path count) and *(astar + 0xbc) (coarse-path
+//     u16 buffer): direct field reads at fixed, already-pinned offsets on
+//     `this` - no getter, no vtable dispatch.
+//   No writes to AStarClass or any engine object; only AstarDump::Record
+//   fields and the module-local pendingCorridorActive are written.
+//
+// AStarClass_CoreSearch_AstarDumpCostGrid (0x429F5A):
+//   - R->EAX (cost class, the vtable-107 getter's ALREADY-COMPUTED return
+//     value - read, not re-invoked) and R->EBX (CellClass*): plain register
+//     reads. The getter itself is not called a second time; its result is
+//     captured off the register it was about to be moved into.
+//   - *(cell + 0x24), *(cell + 0x26) (CellClass::MapCoords.X/Y), *(cell +
+//     0x140) (CellClass::Flags): direct field reads at fixed offsets, no
+//     getter.
+//   No writes to CellClass or AStarClass; only AstarDump::Record fields.
+//
+// AStarClass_CoreSearch_AstarDumpRawCodes (0x42A40F):
+//   - R->EAX (reconstruction's already-computed return value, &DAT_0089a2d8):
+//     plain register read; the reconstruction function itself is NOT called
+//     again.
+//   - *(pathData + 0x8) (node count), *(pathData + 0xc) (code buffer
+//     pointer), buffer[i] (int codes): direct field/array reads off the
+//     already-populated, fixed global path-data struct.
+//   No writes to the path-data struct or the code buffer (the two smoothing
+//   calls that mutate it in place have NOT run yet at this hook's timing, and
+//   this hook doesn't call them or touch the buffer itself); only
+//   AstarDump::Record fields are written.
+//
+// AStarClass_FindPath_AstarDumpExitEarly / ...ExitNormal (0x42CB36, 0x42CCC4,
+// this task):
+//   - No FindPath register or stack read at all (by design, work item 1):
+//     these hooks read only the module's own Current()/pendingCorridorActive
+//     module-local state and Record fields already written by the other four
+//     hooks. Result-string comparison (std::strcmp) and Flush()'s file I/O
+//     are the only "action" here, and Flush() only touches AstarDump's own
+//     DLL-owned static `records[]` buffer and the filesystem (ASTARDUMP\*.TXT)
+//     - never the game/simulation state.
+//
+// Cross-cutting: no hook above calls a Randomizer/RNG routine, no hook writes
+// any engine object field (AStarClass/FootClass/UnitTypeClass/CellClass), and
+// every "getter" invoked (WhatAmI, GetType, the vtable-107 cost-class call
+// upstream of the COSTGRID hook) is either a pure RTTI/static-data accessor or
+// was already-called by the engine itself (its result captured off a
+// register/struct field, never re-invoked by this module).
+// ---------------------------------------------------------------------------

@@ -90,6 +90,15 @@ public:
 		int CostGridCount;
 
 		char Result[16];
+
+		// Task 11: per-section overflow-marker anti-spam. Each Append* function
+		// logs an [AstarDump] "dropped (buffer full)" line the FIRST time its
+		// section's cap is hit, then sets this flag so later drops in the same
+		// record (there can be thousands for COSTGRID) stay silent. Zeroed by
+		// Arm()'s memset, so every freshly-armed record can log once per section.
+		bool RawCodesOverflowLogged;
+		bool CoarsePathOverflowLogged;
+		bool CostGridOverflowLogged;
 	};
 
 	// Reserves the next free record slot and fills its header fields
