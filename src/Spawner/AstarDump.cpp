@@ -20,6 +20,13 @@
 #include "AstarDump.h"
 
 #include <Utilities/Debug.h>
+#include <Utilities/Macro.h>
+
+#include <FootClass.h>
+#include <GeneralDefinitions.h>
+#include <GeneralStructures.h>
+#include <UnitTypeClass.h>
+#include <Unsorted.h>
 
 #include <Windows.h>
 #include <cstdio>
@@ -192,4 +199,119 @@ void AstarDump::Flush()
 void AstarDump::Reset()
 {
 	recordCount = 0;
+}
+
+namespace
+{
+	// Task 8 gate: yes-mode arms only these three start cells (values from the
+	// pinned scenario replay), all-mode arms every harvester FindPath call.
+	bool IsGateStartCell(short x, short y)
+	{
+		return (x == 136 && y == 211)
+			|| (x == 138 && y == 213)
+			|| (x == 130 && y == 216);
+	}
+
+	// The moving object's type pointer (ObjectClass::GetType(), a pure RTTI/
+	// static-data accessor - no simulation state is mutated or read by calling
+	// it) is only meaningfully a UnitTypeClass* when the object itself is a
+	// UnitClass; WhatAmI() (also a pure RTTI query) confirms that before the
+	// downcast. Harvesters in the retail rules are always UnitClass instances
+	// with TechnoTypeClass::Harvester set, so this is the correct all-mode
+	// filter and the correct source for SPEEDTYPE.
+	UnitTypeClass* GetUnitTypeIfUnit(FootClass* pFoot)
+	{
+		if (!pFoot || pFoot->WhatAmI() != AbstractType::Unit)
+			return nullptr;
+
+		return static_cast<UnitTypeClass*>(pFoot->GetType());
+	}
+
+	bool IsHarvesterFoot(FootClass* pFoot)
+	{
+		UnitTypeClass* pType = GetUnitTypeIfUnit(pFoot);
+		return pType && pType->Harvester;
+	}
+
+	const char* SpeedTypeName(SpeedType speed)
+	{
+		switch (speed)
+		{
+		case SpeedType::Foot:       return "foot";
+		case SpeedType::Track:      return "track";
+		case SpeedType::Wheel:      return "wheel";
+		case SpeedType::Hover:      return "hover";
+		case SpeedType::Winged:     return "winged";
+		case SpeedType::Float:      return "float";
+		case SpeedType::Amphibious: return "amphibious";
+		case SpeedType::FloatBeach: return "floatbeach";
+		case SpeedType::None:
+		default:                    return "none";
+		}
+	}
+}
+
+// AStarClass::FindPath entry (VA 0x42C900, __thiscall, callee-cleans
+// `ret 0x1c`; see docs/superpowers/notes/astardump-offsets.md Step 2/Step 5 in
+// the ratwo repo for the full ABI citation). The hook is installed at the
+// very first instruction, before the function's own prologue runs, so ESP at
+// hook time still points at the return address the CALL pushed and ECX still
+// holds `this` - the stack-arg offsets below (+0x4.. +0xc) are exactly the
+// pinned ABI's stack offsets, unshifted. Patched byte count (0x5) is chosen
+// to end on an instruction boundary: `sub esp,0x20` (3 bytes) + `push ebx`
+// (1 byte) + `push ebp` (1 byte) = 5 bytes, matching the confirmed raw
+// disassembly of the prologue.
+//
+// This task (Task 8) reads only the search inputs: start cell (+0x4), dest
+// cell (+0x8), and the moving object (+0xc, used for UNITID + SPEEDTYPE).
+// RAW_CODES (+0x10), node budget (+0x14), zone override (+0x18) and the
+// corridor-activation argument (+0x1c) are Task 9/10 scope and are not read
+// here. `this` (ECX, AStarClass*) is not read: nothing this task captures
+// depends on any AStarClass field, only on the call's own arguments.
+//
+// Read-only: no field of AStarClass/FootClass/UnitTypeClass touched here is
+// written, no game-pool allocation happens, and the two RTTI accessors
+// called (WhatAmI(), GetType()) are pure metadata queries with no simulation
+// side effects (they do not draw from Randomizer or mutate any object).
+DEFINE_HOOK(0x42C900, AStarClass_FindPath_AstarDumpEntry, 0x5)
+{
+	if (!AstarDump::Enable)
+		return 0;
+
+	GET_STACK(CellStruct*, pStart, 0x4);
+	GET_STACK(CellStruct*, pDest, 0x8);
+	GET_STACK(FootClass*, pFoot, 0xc);
+
+	if (!pStart || !pDest)
+		return 0;
+
+	bool armThis = false;
+	switch (AstarDump::CaptureMode)
+	{
+	case AstarDump::Mode::Narrow:
+		armThis = IsGateStartCell(pStart->X, pStart->Y);
+		break;
+	case AstarDump::Mode::All:
+		armThis = IsHarvesterFoot(pFoot);
+		break;
+	case AstarDump::Mode::Disabled:
+	default:
+		armThis = false;
+		break;
+	}
+
+	if (!armThis)
+		return 0;
+
+	const int frame = Unsorted::CurrentFrame;
+	const uint32_t unitId = pFoot ? pFoot->UniqueID : 0u;
+
+	SpeedType speedType = SpeedType::None;
+	if (UnitTypeClass* pType = GetUnitTypeIfUnit(pFoot))
+		speedType = pType->SpeedType;
+
+	AstarDump::Arm(frame, unitId, pStart->X, pStart->Y, pDest->X, pDest->Y,
+		SpeedTypeName(speedType));
+
+	return 0;
 }
