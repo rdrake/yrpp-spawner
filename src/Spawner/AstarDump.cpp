@@ -205,6 +205,12 @@ namespace
 		fprintf(pFile, "SPEEDTYPE=%s\n", record.SpeedType);
 		fprintf(pFile, "ATTEMPTS=%d\n", record.Attempts);
 		fprintf(pFile, "CORRIDOR_ACTIVE=%d\n", record.CorridorActive ? 1 : 0);
+		// Fix I1: per-search cost-class clamp condition (bVar10 @ FUN_00429A90).
+		// The COSTGRID class field is the RAW, PRE-CLAMP class; the replay applies
+		// `if (CLAMP_ACTIVE && class < 7) class = 0` per cell to get the engine's
+		// effective class. New backward-compatible key - the Rust parser ignores
+		// unknown keys via fields.get(), so this is safe until ratwo consumes it.
+		fprintf(pFile, "CLAMP_ACTIVE=%d\n", record.ClampActive ? 1 : 0);
 
 		fprintf(pFile, "COARSE_PATH=");
 		if (record.CoarsePathCount == 0)
@@ -365,7 +371,15 @@ DEFINE_HOOK(0x42C900, AStarClass_FindPath_AstarDumpEntry, 0x5)
 	switch (AstarDump::CaptureMode)
 	{
 	case AstarDump::Mode::Narrow:
-		armThis = IsGateStartCell(pStart->X, pStart->Y);
+		// Fix I2: harvester-gate Narrow mode too. The 3 gate cells ARE harvester
+		// start cells, so the intent is harvester-only - but arming purely on the
+		// start cell would also catch a non-harvester (infantry/MCV) that happens
+		// to run FindPath from an exact gate cell. That record would carry a
+		// foot/hover/none SPEEDTYPE, which the Rust parser (astar_dump.rs) HARD-
+		// REJECTS (only track/wheel are accepted), corrupting the trace. ANDing
+		// IsHarvesterFoot (the same helper All mode already uses) makes both modes
+		// harvester-gated, so SPEEDTYPE is always track/wheel.
+		armThis = IsGateStartCell(pStart->X, pStart->Y) && IsHarvesterFoot(pFoot);
 		break;
 	case AstarDump::Mode::All:
 		armThis = IsHarvesterFoot(pFoot);
@@ -488,9 +502,34 @@ DEFINE_HOOK(0x429A90, AStarClass_CoreSearch_AstarDumpAttempt, 0x5)
 // jmp cannot fit within the 2-byte `mov ebx,eax` alone, so the next whole
 // instruction is included; both re-execute normally after the hook returns).
 //
+// COST-CLASS CLAMP (Fix I1): the captured class (EAX here) is PRE-CLAMP. The
+// engine clamps it immediately after this hook window (capstone, linear from
+// 0x429A90):
+//   0x429f5a: mov ebx,eax             ; ebx <- raw cost class (this hook: EAX)
+//   0x429f5c: mov al,[esp+0x12]       ; al  <- bVar10 (clamp-condition byte)
+//   0x429f60: test al,al
+//   0x429f62: je   0x429f6b           ; cond==0 -> no clamp
+//   0x429f64: cmp  ebx,7
+//   0x429f67: jge  0x429f6b           ; class>=7 -> no clamp
+//   0x429f69: xor  ebx,ebx            ; else class = 0   (decompile line 216:
+//                                     ;   `if (bVar10 && iVar17 < 7) iVar17 = 0`)
+// The clamped class in EBX is what the engine then feeds into the cost math
+// (pushed at 0x429F84 into the 0x429830 cost call). `[esp+0x12]` (bVar10) is a
+// PER-SEARCH CONSTANT: set once at FUN_00429A90 lines 98-101 from a vtable-33
+// result field (+0xc94) BEFORE the neighbor loop, never reassigned in it, so
+// it is identical for every neighbor of this search. We read it here (it is the
+// second instruction of this very 6-byte patch window - ESP is unchanged
+// between 0x429F5A and the engine's own read at 0x429F5C, so GET_STACK at
+// offset 0x12 reads the identical byte) and stash it as record->ClampActive
+// (each cell writes the same value). REPLAY MUST reproduce the clamp per cell:
+//   effective_class = (CLAMP_ACTIVE && raw_class < 7) ? 0 : raw_class
+// Capturing raw class + CLAMP_ACTIVE keeps the 4-field COSTGRID cell format
+// (x:y:class:flags) unchanged while carrying enough to rebuild the engine's
+// effective class.
+//
 // GLOBAL hook, fires per-neighbor (thousands/search): bails when no record is
 // armed. The 4096-cell cap is enforced by AppendCostGridCell. Read-only:
-// direct register + cached-field reads only, no getter re-invocation, no
+// direct register + cached-stack/field reads only, no getter re-invocation, no
 // writes.
 DEFINE_HOOK(0x429F5A, AStarClass_CoreSearch_AstarDumpCostGrid, 0x6)
 {
@@ -505,6 +544,15 @@ DEFINE_HOOK(0x429F5A, AStarClass_CoreSearch_AstarDumpCostGrid, 0x6)
 	const uintptr_t cell = R->EBX<uintptr_t>();
 	if (!cell)
 		return 0;
+
+	// Fix I1: capture the per-search cost-class clamp condition (bVar10). This is
+	// the exact byte the engine reads one instruction later (`mov al,[esp+0x12]`
+	// at 0x429F5C); ESP is unchanged from the hook site, so GET_STACK offset 0x12
+	// reads the identical slot. Per-search constant, so writing it on every cell
+	// is harmless. See the block comment above for the full clamp semantics the
+	// replay must apply.
+	GET_STACK(BYTE, clampByte, 0x12);
+	record->ClampActive = (clampByte != 0);
 
 	// CellClass field reads (confirmed against reference/yrpp_struct_fields.csv
 	// and YRpp/CellClass.h): MapCoords (CellStruct{short X; short Y}) at +0x24,
@@ -782,6 +830,9 @@ DEFINE_HOOK(0x42CCC4, AStarClass_FindPath_AstarDumpExitNormal, 0x7)
 //   - *(cell + 0x24), *(cell + 0x26) (CellClass::MapCoords.X/Y), *(cell +
 //     0x140) (CellClass::Flags): direct field reads at fixed offsets, no
 //     getter.
+//   - GET_STACK [esp+0x12] (bVar10, the cost-class clamp condition, Fix I1):
+//     plain stack read of a value the engine itself computed once per search -
+//     not re-invoked here, just observed off the stack slot it already lives in.
 //   No writes to CellClass or AStarClass; only AstarDump::Record fields.
 //
 // AStarClass_CoreSearch_AstarDumpRawCodes (0x42A40F):

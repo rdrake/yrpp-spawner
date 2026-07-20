@@ -80,6 +80,19 @@ public:
 		int Attempts;
 		bool CorridorActive;
 
+		// Fix I1: the engine conditionally zeroes each neighbor's cost class right
+		// after the vtable-107 getter returns - at 0x429F64..0x429F69,
+		// `if (bVar10 && rawClass < 7) class = 0` (decompile FUN_00429A90 line 216).
+		// The COSTGRID hook captures the RAW, PRE-CLAMP class (EAX at 0x429F5A), so
+		// the replay needs the clamp predicate to reproduce the engine's EFFECTIVE
+		// class. bVar10 (the `[esp+0x12]` condition byte) is a PER-SEARCH CONSTANT:
+		// it is computed once at FUN_00429A90 lines 98-101 (vtable-33 result field
+		// +0xc94), before the neighbor loop, and is never reassigned inside it - so
+		// it is captured once per record (each COSTGRID cell writes the same value)
+		// and emitted as CLAMP_ACTIVE=0|1. Replay rule: for every COSTGRID cell,
+		// `if (CLAMP_ACTIVE && class < 7) class = 0` before using the class in cost.
+		bool ClampActive;
+
 		int RawCodes[MaxRawCodes];
 		int RawCodesCount;
 
