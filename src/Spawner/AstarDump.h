@@ -117,4 +117,19 @@ public:
 
 	// Clears the buffer without writing anything (e.g. on a new game start).
 	static void Reset();
+
+	// Returns the record most recently armed by Arm() (the "current" FindPath
+	// being captured), or nullptr when no capture is in flight. The inner
+	// core-search hooks (Task 9+) append per-attempt data to this record; a
+	// null return means "this FindPath is not being traced" and the hook must
+	// no-op cheaply. Set by Arm() on a successful arm; cleared at FindPath
+	// entry (Task 8 hook), on Flush()/Reset(), and by Task 11's exit hook.
+	static Record* Current();
+
+	// Clears the current-record handle (and the pending per-attempt state)
+	// without touching the record buffer. Task 11's FindPath-exit hook calls
+	// this once the search returns; the FindPath-entry hook calls it before
+	// deciding whether to arm, so a non-captured FindPath never inherits a
+	// stale current record.
+	static void ClearCurrent();
 };

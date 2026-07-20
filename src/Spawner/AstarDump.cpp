@@ -43,6 +43,21 @@ namespace
 	// pool. Zero-initialized at load time.
 	AstarDump::Record records[AstarDump::MaxRecords];
 	int recordCount = 0;
+
+	// Shared "current armed record" handle. The FindPath-entry hook (Task 8)
+	// arms a record via Arm(), which stashes it here; the inner core-search
+	// hooks (Task 9, below) read it back through AstarDump::Current() and
+	// append per-attempt data. nullptr means no FindPath is being captured.
+	AstarDump::Record* currentRecord = nullptr;
+
+	// Pending per-attempt corridor-activation flag, captured at each
+	// core-search entry (FUN_00429A90 param_7). The brief wants the SUCCESSFUL
+	// attempt's corridor state promoted to the record; without the FindPath
+	// exit hook (Task 11) there is no reliable success signal at this layer, so
+	// this task records the LAST attempt's state (each entry overwrites it and
+	// the record's CorridorActive/COARSE_PATH) and leaves the promotion of the
+	// successful attempt to Task 11, which can read this pending value.
+	bool pendingCorridorActive = false;
 }
 
 AstarDump::Record* AstarDump::Arm(int frame, uint32_t unitId, int startX, int startY,
@@ -78,7 +93,23 @@ AstarDump::Record* AstarDump::Arm(int frame, uint32_t unitId, int startX, int st
 	std::strncpy(record->SpeedType, speedType ? speedType : "", sizeof(record->SpeedType) - 1);
 	std::strncpy(record->Result, "pending", sizeof(record->Result) - 1);
 
+	// This freshly-armed record becomes the module's current capture target so
+	// the inner core-search hooks can append to it.
+	currentRecord = record;
+	pendingCorridorActive = false;
+
 	return record;
+}
+
+AstarDump::Record* AstarDump::Current()
+{
+	return currentRecord;
+}
+
+void AstarDump::ClearCurrent()
+{
+	currentRecord = nullptr;
+	pendingCorridorActive = false;
 }
 
 void AstarDump::AppendRawCode(Record* record, int code)
@@ -199,6 +230,8 @@ void AstarDump::Flush()
 void AstarDump::Reset()
 {
 	recordCount = 0;
+	currentRecord = nullptr;
+	pendingCorridorActive = false;
 }
 
 namespace
@@ -278,6 +311,14 @@ DEFINE_HOOK(0x42C900, AStarClass_FindPath_AstarDumpEntry, 0x5)
 	if (!AstarDump::Enable)
 		return 0;
 
+	// Start every entered FindPath with no current capture target: Arm() below
+	// re-sets it only when this call is actually being traced. Without this a
+	// non-armed FindPath would leave the previous call's record current, and
+	// the two global inner hooks (which fire for EVERY FindPath) would append
+	// this call's cells into the wrong record. Task 11's exit hook will also
+	// clear it after the search returns.
+	AstarDump::ClearCurrent();
+
 	GET_STACK(CellStruct*, pStart, 0x4);
 	GET_STACK(CellStruct*, pDest, 0x8);
 	GET_STACK(FootClass*, pFoot, 0xc);
@@ -312,6 +353,125 @@ DEFINE_HOOK(0x42C900, AStarClass_FindPath_AstarDumpEntry, 0x5)
 
 	AstarDump::Arm(frame, unitId, pStart->X, pStart->Y, pDest->X, pDest->Y,
 		SpeedTypeName(speedType));
+
+	return 0;
+}
+
+// AStarClass core per-attempt search entry (VA 0x429A90, FUN_00429A90,
+// __thiscall; see astardump-offsets.md Step 3). FindPath calls this once per
+// hierarchical-corridor retry; ECX = param_1 = AStarClass* (this), and stack
+// args param_2..param_7 sit at [esp+0x4]..[esp+0x18]. The hook is installed at
+// the first instruction, before the prologue runs, so ESP still points at the
+// CALL's return address ([esp+0]) and the stack-arg offsets are unshifted -
+// param_7 (the corridor-activation flag) is at [esp+0x18]. Patched byte count
+// (0x5) ends on an instruction boundary: `sub esp,0x4c` (3 bytes, 83ec4c) +
+// `push ebx` (1, 53) + `push ebp` (1, 55) = 5 bytes (confirmed by capstone
+// linear disasm of FUN_00429A90 from its 0x429A90 entry).
+//
+// This is a GLOBAL hook - it fires for EVERY FindPath's core search, gated or
+// not - so it bails immediately when no record is armed (Current()==nullptr),
+// keeping the read-only, low-overhead design.
+//
+// Per armed attempt: increment ATTEMPTS; read param_7 -> CORRIDOR_ACTIVE
+// (stashed pending for Task 11 to promote the successful attempt, and written
+// through to the record as the LAST attempt's state); and refill COARSE_PATH
+// from `this`'s level-0 coarse-path buffer (AStar+0xbc, u16 ids, count at
+// AStar+0xc74). Read-only: only argument/field reads, no writes, no alloc, no
+// re-invocation of any engine routine.
+DEFINE_HOOK(0x429A90, AStarClass_CoreSearch_AstarDumpAttempt, 0x5)
+{
+	if (!AstarDump::Enable)
+		return 0;
+
+	AstarDump::Record* record = AstarDump::Current();
+	if (!record)
+		return 0;
+
+	// param_7 (corridor-activation flag) at [esp+0x18].
+	GET_STACK(BYTE, corridorActiveByte, 0x18);
+	const bool corridorActive = (corridorActiveByte != 0);
+
+	++record->Attempts;
+
+	// Last-attempt semantics (documented deviation - no success signal exists
+	// without Task 11's exit hook): overwrite the record's corridor state and
+	// coarse path each attempt. pendingCorridorActive lets Task 11 promote the
+	// SUCCESSFUL attempt's value instead.
+	pendingCorridorActive = corridorActive;
+	record->CorridorActive = corridorActive;
+
+	// COARSE_PATH: level-0 corridor coarse path on `this` (ECX = AStarClass*).
+	// buffer = AStar + 0xbc (u16 cell ids, up to 500/level); count = AStar +
+	// 0xc74 (int). Level 0 chosen per the brief's "if ambiguous, capture level
+	// 0 and document" - the level-0 buffer is the top-level corridor path the
+	// per-cell retries follow.
+	const uintptr_t astar = R->ECX<uintptr_t>();
+	record->CoarsePathCount = 0; // refill for this (latest) attempt
+	int coarseCount = *reinterpret_cast<const int*>(astar + 0xc74);
+	if (coarseCount < 0)
+		coarseCount = 0;
+	if (coarseCount > 500)
+		coarseCount = 500; // per-level physical cap (500 u16 entries/level)
+
+	const unsigned short* coarse = reinterpret_cast<const unsigned short*>(astar + 0xbc);
+	for (int i = 0; i < coarseCount; ++i)
+		AstarDump::AppendCoarsePathId(record, coarse[i]);
+
+	return 0;
+}
+
+// COSTGRID capture (VA 0x429F5A, inside FUN_00429A90's neighbor-eval loop; see
+// astardump-offsets.md Step 4 "Neighbor-eval cost-class site"). The engine
+// instruction at this address is `mov ebx,eax` (bytes 8b d8), copying the
+// vtable-107 cost-class getter's return value into EBX. Syringe restores the
+// patched original bytes AFTER the hook body runs (the same pre-instruction
+// register semantics the Task 8 entry hook relies on to read unshifted stack
+// args), so at hook entry the `mov ebx,eax` has NOT executed yet. Therefore:
+//   * EAX = the vtable-107 return value = the cost class (the value about to
+//     be moved into EBX; == decompile iVar17 before its `<7 -> 0` clamp).
+//   * EBX = the candidate CellClass* (decompile iVar16), still live - it is
+//     the pointer this loop dereferenced at the corridor gate ([ebx+0x122])
+//     and pushed as the vtable-107 call's first argument at 0x429F51
+//     (`push ebx`), and it is callee-preserved across the 0x429F54 call.
+//
+// This RESOLVES the note's open sub-pin (which register holds the CellClass*
+// at 0x429F5A): capstone shows it is EBX, and consequently the class must be
+// read from EAX rather than EBX at this exact hook instant. Reading EBX here
+// would yield the cell pointer, not the class; reading the class from EAX and
+// the cell from EBX captures both with no re-invocation of the getter.
+//
+// Patched byte count (0x6) ends on an instruction boundary: `mov ebx,eax`
+// (2 bytes, 8bd8) + `mov al,[esp+0x12]` (4 bytes, 8a442412) = 6 bytes (a 5-byte
+// jmp cannot fit within the 2-byte `mov ebx,eax` alone, so the next whole
+// instruction is included; both re-execute normally after the hook returns).
+//
+// GLOBAL hook, fires per-neighbor (thousands/search): bails when no record is
+// armed. The 4096-cell cap is enforced by AppendCostGridCell. Read-only:
+// direct register + cached-field reads only, no getter re-invocation, no
+// writes.
+DEFINE_HOOK(0x429F5A, AStarClass_CoreSearch_AstarDumpCostGrid, 0x6)
+{
+	if (!AstarDump::Enable)
+		return 0;
+
+	AstarDump::Record* record = AstarDump::Current();
+	if (!record)
+		return 0;
+
+	const int costClass = R->EAX<int>();
+	const uintptr_t cell = R->EBX<uintptr_t>();
+	if (!cell)
+		return 0;
+
+	// CellClass field reads (confirmed against reference/yrpp_struct_fields.csv
+	// and YRpp/CellClass.h): MapCoords (CellStruct{short X; short Y}) at +0x24,
+	// so X = +0x24 (u16), Y = +0x26 (u16); Flags (u32) at +0x140 (the 0x40000
+	// layer bit lives here). Emitted as the raw u32 (serializer writes hex).
+	const int x = *reinterpret_cast<const unsigned short*>(cell + 0x24);
+	const int y = *reinterpret_cast<const unsigned short*>(cell + 0x26);
+	const int flags = static_cast<int>(*reinterpret_cast<const uint32_t*>(cell + 0x140));
+
+	AstarDump::AppendCostGridCell(record, x, y, costClass, flags);
 
 	return 0;
 }
