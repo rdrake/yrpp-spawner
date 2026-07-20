@@ -475,3 +475,93 @@ DEFINE_HOOK(0x429F5A, AStarClass_CoreSearch_AstarDumpCostGrid, 0x6)
 
 	return 0;
 }
+
+// RAW_CODES capture (VA 0x42A40F, inside FUN_00429A90, immediately after the
+// reconstruction call `call 0x42AA90` at 0x42A406 returns; see
+// astardump-offsets.md Step 4 "Reconstruction caller site - RAW_CODES post-fill,
+// pre-smoothing"). This is the PRE-SMOOTHING direction-code path - the primary
+// data the whole tool compares against the Rust port.
+//
+// TIMING (critical, same pattern as the Task 8/9 hooks): Syringe restores the
+// patched original bytes AFTER the hook body runs, so at hook entry the patched
+// instruction `mov edi,eax` (0x42A40F) has NOT executed yet. EDI therefore still
+// holds its stale prior value; the reconstruction return value is still live in
+// EAX (the engine copies it into EDI here precisely so it survives the two
+// following smoothing calls). We MUST read the pointer from EAX, not EDI.
+// Capstone (linear from 0x429A90):
+//   0x42a406: call 0x42aa90               ; ret value (path-data struct ptr) -> EAX
+//   0x42a40b: mov  ebx,[esp+0x68]  8b5c2468; reloads param_4, leaves EAX intact
+//   0x42a40f: mov  edi,eax         8bf8    ; <-- hook site (patched)
+//   0x42a411: push ebx             53
+//   0x42a412: push edi             57
+//   0x42a413: mov  ecx,esi         8bce
+//   0x42a415: call 0x42b210               ; smoothing pass 1 - mutates buffer IN PLACE
+//   0x42a41e: call 0x42b7f0               ; smoothing pass 2 - mutates buffer IN PLACE
+// Patched byte count (0x6) ends on an instruction boundary: mov edi,eax (2) +
+// push ebx (1) + push edi (1) + mov ecx,esi (2) = 6 bytes, landing exactly at
+// 0x42A415 - BEFORE either smoothing call. Copying the buffer in this body
+// therefore captures the raw, pre-smoothing codes; both smoothing passes read
+// the same buffer (via struct+0xc) and overwrite it in place afterwards, so a
+// hook placed at or after 0x42A415 would see smoothed data.
+//
+// EAX is the reconstruction return value = &DAT_0089a2d8, a fixed global
+// path-data struct (FUN_0042aa90 `return &DAT_0089a2d8;`). LENGTH source
+// (resolved from the decompile, not guessed): FUN_0042aa90 stores the path node
+// count (`param_1[3]`) at struct+0x8 (_DAT_0089a2e0) and the direction-code
+// output buffer pointer (`param_2`) at struct+0xc (_DAT_0089a2e4). The codes are
+// 4-byte DWORD entries (undefined4*, values 0..8; delta->code LUT DAT_00818760),
+// count = nodeCount - 1, with a 0xffffffff terminator written into the final
+// slot (FUN_0042aa90 line 63). The 0x42a3f8 `cmp [eax+0xc],2 / jl` guard means
+// reconstruction only runs for nodeCount >= 2, so codeCount >= 1 whenever this
+// hook fires; the empty/zero-length branch below is defensive only.
+//
+// Fires per successful reconstruction (a failed FindPath never reaches 0x42A40F,
+// so its record keeps the initialized RESULT="pending" - Task 11's exit hook
+// finalizes pending->none). Like the COARSE_PATH hook, RawCodesCount is reset
+// each fire so the record holds the LATEST reconstruction. Read-only: reads EAX
+// + the path-data struct + the code buffer, no writes, no alloc, no re-invocation
+// of the reconstruction or smoothing passes.
+DEFINE_HOOK(0x42A40F, AStarClass_CoreSearch_AstarDumpRawCodes, 0x6)
+{
+	if (!AstarDump::Enable)
+		return 0;
+
+	AstarDump::Record* record = AstarDump::Current();
+	if (!record)
+		return 0;
+
+	// Read the reconstruction return value from EAX (NOT EDI - see timing note).
+	const uintptr_t pathData = R->EAX<uintptr_t>();
+	if (!pathData)
+		return 0;
+
+	const int nodeCount = *reinterpret_cast<const int*>(pathData + 0x8);
+	const int* buffer = *reinterpret_cast<const int* const*>(pathData + 0xc);
+
+	// Refill for this (latest) reconstruction. RESULT=ok even for a zero-length
+	// path -> a bare empty RAW_CODES= (RawCodesCount stays 0), which is what the
+	// Rust parser expects (it splits on ',' and rejects the literal "empty").
+	record->RawCodesCount = 0;
+
+	int codeCount = nodeCount - 1;
+	if (codeCount < 0)
+		codeCount = 0;
+	if (codeCount > MaxRawCodes)
+		codeCount = MaxRawCodes; // never over-read past the capped copy
+
+	if (buffer)
+	{
+		for (int i = 0; i < codeCount; ++i)
+		{
+			const int code = buffer[i];
+			if (code == -1)
+				break; // in-band 0xffffffff terminator (defensive; count is primary)
+
+			AstarDump::AppendRawCode(record, code);
+		}
+	}
+
+	std::strncpy(record->Result, "ok", sizeof(record->Result) - 1);
+
+	return 0;
+}
