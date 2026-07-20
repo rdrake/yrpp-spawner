@@ -46,8 +46,10 @@ AstarDump::Record* AstarDump::Arm(int frame, uint32_t unitId, int startX, int st
 
 	if (recordCount >= MaxRecords)
 	{
-		Debug::Log("[AstarDump] Record buffer full (MaxRecords=%d), dropping frame=%d unit=0x%08x\n",
-			MaxRecords, frame, unitId);
+		// Record-buffer-full drops silently in Task 7, matching the section
+		// appenders (AppendRawCode/AppendCoarsePathId/AppendCostGridCell). The
+		// logged overflow marker is Task 11's scope, so all drop paths stay
+		// consistent until then.
 		return nullptr;
 	}
 
@@ -143,21 +145,22 @@ namespace
 		}
 		fprintf(pFile, "\n");
 
+		// COSTGRID: an empty grid MUST serialize as a bare value ("COSTGRID=") —
+		// the Rust parser (astar_dump.rs) routes any non-empty string into the
+		// x:y:class:flags splitter and hard-fails on the literal "empty" (unlike
+		// COARSE_PATH, whose parser branch special-cases "empty"). Flags are emitted
+		// in HEX: the parser reads parts[3] via from_str_radix(., 16). Cost/class
+		// (parts[2]) stays decimal to match the parser's parse::<u8>().
 		fprintf(pFile, "COSTGRID=");
-		if (record.CostGridCount == 0)
+		for (int i = 0; i < record.CostGridCount; ++i)
 		{
-			fprintf(pFile, "empty");
-		}
-		else
-		{
-			for (int i = 0; i < record.CostGridCount; ++i)
-			{
-				const AstarDump::CostGridCell& cell = record.CostGrid[i];
-				fprintf(pFile, "%s%d:%d:%d:%d", (i == 0) ? "" : ";", cell.X, cell.Y, cell.Cost, cell.Flags);
-			}
+			const AstarDump::CostGridCell& cell = record.CostGrid[i];
+			fprintf(pFile, "%s%d:%d:%d:%x", (i == 0) ? "" : ";", cell.X, cell.Y, cell.Cost, cell.Flags);
 		}
 		fprintf(pFile, "\n");
 
+		// RAW_CODES: an empty list is a bare value ("RAW_CODES="), NOT the literal
+		// "empty" — the parser splits on ',' and would fail to parse "empty" as u8.
 		fprintf(pFile, "RAW_CODES=");
 		for (int i = 0; i < record.RawCodesCount; ++i)
 			fprintf(pFile, "%s%d", (i == 0) ? "" : ",", record.RawCodes[i]);
