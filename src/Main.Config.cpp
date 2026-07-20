@@ -18,12 +18,16 @@
 */
 
 #include "Main.Config.h"
+#include <Spawner/AstarDump.h>
 #include <Spawner/SyncDump.h>
+#include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
 
 #include <CCINIClass.h>
 #include <GameOptionsClass.h>
 #include <Unsorted.h>
+
+#include <cstring>
 
 void MainConfig::LoadFromINIFile()
 {
@@ -46,6 +50,7 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDump             = pINI->ReadBool(pOptionsSection, "SYNCDUMP", this->SyncDump);
 		this->SyncDumpComputeCRC   = pINI->ReadBool(pOptionsSection, "SYNCDUMP.ComputeCRC", this->SyncDumpComputeCRC);
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
+		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
 	}
 
 	const char* pVideoSection = "Video";
@@ -85,6 +90,24 @@ void MainConfig::ApplyStaticOptions()
 		SyncDump::Enable = true;
 		SyncDump::ComputeCRC = this->SyncDumpComputeCRC;
 		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
+	}
+
+	if (_stricmp(this->AstarDumpMode, "yes") == 0)
+	{
+		AstarDump::Enable = true;
+		AstarDump::CaptureMode = AstarDump::Mode::Narrow;
+		Debug::Log("[AstarDump] Armed (mode=narrow)\n");
+	}
+	else if (_stricmp(this->AstarDumpMode, "all") == 0)
+	{
+		AstarDump::Enable = true;
+		AstarDump::CaptureMode = AstarDump::Mode::All;
+		Debug::Log("[AstarDump] Armed (mode=all)\n");
+	}
+	else
+	{
+		AstarDump::Enable = false;
+		AstarDump::CaptureMode = AstarDump::Mode::Disabled;
 	}
 
 	if (this->SingleProcAffinity)
