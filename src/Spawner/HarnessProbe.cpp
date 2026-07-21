@@ -43,6 +43,7 @@
 
 bool HarnessProbe::Enable = false;
 char HarnessProbe::Dir[HarnessProbe::MaxDirLen] = "HARNESS";
+int HarnessProbe::PinnedSeed = 0;
 
 namespace
 {
