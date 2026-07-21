@@ -35,6 +35,7 @@ public:
 	bool SyncDumpComputeCRC;
 	int SyncDumpMaxFrames;
 	char AstarDumpMode[8];
+	char CellDumpFrames[128];
 
 	// Video
 	bool NoWindowFrame;
@@ -61,6 +62,7 @@ public:
 		, SyncDumpComputeCRC { true }
 		, SyncDumpMaxFrames { 5000 }
 		, AstarDumpMode { "no" }
+		, CellDumpFrames { "" }
 
 		// Video
 		, DDrawTargetFPS { -1 }

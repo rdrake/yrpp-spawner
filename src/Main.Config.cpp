@@ -19,6 +19,7 @@
 
 #include "Main.Config.h"
 #include <Spawner/AstarDump.h>
+#include <Spawner/CellDump.h>
 #include <Spawner/SyncDump.h>
 #include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
@@ -27,6 +28,7 @@
 #include <GameOptionsClass.h>
 #include <Unsorted.h>
 
+#include <cstdlib>
 #include <cstring>
 
 void MainConfig::LoadFromINIFile()
@@ -51,6 +53,7 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDumpComputeCRC   = pINI->ReadBool(pOptionsSection, "SYNCDUMP.ComputeCRC", this->SyncDumpComputeCRC);
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
 		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
+		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
 	}
 
 	const char* pVideoSection = "Video";
@@ -108,6 +111,39 @@ void MainConfig::ApplyStaticOptions()
 	{
 		AstarDump::Enable = false;
 		AstarDump::CaptureMode = AstarDump::Mode::Disabled;
+	}
+
+	// CELLDUMP.Frames=<frame>[,<frame>...] - whole-map per-cell pathfinding
+	// snapshots (Spawner/CellDump.cpp). Empty (the default) leaves it off.
+	// Malformed tokens are skipped; at most CellDump::MaxDumpFrames entries.
+	{
+		CellDump::FrameCount = 0;
+		const char* p = this->CellDumpFrames;
+		while (*p && CellDump::FrameCount < CellDump::MaxDumpFrames)
+		{
+			while (*p == ',' || *p == ' ')
+				++p;
+			if (!*p)
+				break;
+			char* end = nullptr;
+			const long v = strtol(p, &end, 10);
+			if (end == p)
+			{
+				// Non-numeric garbage: skip to the next separator.
+				while (*p && *p != ',')
+					++p;
+				continue;
+			}
+			if (v >= 0)
+				CellDump::Frames[CellDump::FrameCount++] = static_cast<int>(v);
+			p = end;
+		}
+		CellDump::Enable = (CellDump::FrameCount > 0);
+		if (CellDump::Enable)
+		{
+			Debug::Log("[CellDump] Armed (%d dump frame(s): %s)\n",
+				CellDump::FrameCount, this->CellDumpFrames);
+		}
 	}
 
 	if (this->SingleProcAffinity)
