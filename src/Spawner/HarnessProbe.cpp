@@ -472,7 +472,16 @@ namespace
 					// to control, so CellDump::PerFrame may already have run this
 					// invocation. frame+1 is order-independent.
 					const int target = frame + 1;
-					if (CellDump::FrameCount >= CellDump::MaxDumpFrames)
+					if (!CellDump::Enable)
+					{
+						// An "executed" ack here would claim a dump exists even
+						// though CellDump is disarmed (no CELLDUMP.Frames set in
+						// RA2MD.ini) and PerFrame() bails before writing anything -
+						// a lying ack is worse than a rejection, so catch this
+						// before the schedule or capacity guard are touched at all.
+						acked = WriteAck(id, "rejected", "celldump-disabled", requestedFrame, frame);
+					}
+					else if (CellDump::FrameCount >= CellDump::MaxDumpFrames)
 					{
 						acked = WriteAck(id, "rejected", "celldump-full", requestedFrame, frame);
 					}
