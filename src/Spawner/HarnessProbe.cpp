@@ -45,16 +45,31 @@ namespace
 	// ---------------------------------------------------------------------
 	// Raw engine addresses that YRpp does not name.
 	//
-	// The four modal-dialog gate bytes MainLoop tests at 0x55DE4F..0x55DE71.
-	// When any is set the frame counter is NOT incremented (the jump to
-	// 0x55DEC8 skips it) - but our hook at 0x55DDA0 has already run. They are
-	// therefore the empirical signature of "this dispatch fired without
-	// advancing the logic frame".
+	// The four bytes MainLoop tests at 0x55DE4F..0x55DE71. When any is set the
+	// frame counter is NOT incremented (the jump to 0x55DEC8 skips it) - but our
+	// hook at 0x55DDA0 has already run.
+	//
+	// These were originally described as "modal dialog up" gates. That was wrong.
+	// They are GAME-OVER flags, cleared together at scenario start
+	// (0x52DA78..0x52DA8D) and forming the outer game loop's termination test at
+	// 0x55D059:
+	//     0xA83D48  EXIT event processed   (0x4C7917, right after the string
+	//                                       "Processing EXIT event on frame %d")
+	//     0xA83D49  player won             (HouseClass::vf_23 @0x4F8440)
+	//     0xA8ECD0  player defeated        (same)
+	//     0x8B41C0  quit/abort chosen      (0x48CB2E, in ShowSpecialDialog)
+	//
+	// So the no-frame-advance path is the TERMINAL frame of a match, not a dialog.
+	// And it is not observable from here: the EXIT event executes at 0x55DE40,
+	// AFTER this hook, and the outer loop at 0x48CE8F then exits - so MainLoop is
+	// never entered again with a flag set. Measured no_advance == 0 across 23,658
+	// records. They are still recorded because a nonzero reading would falsify
+	// that chain, which is worth knowing cheaply.
 	// ---------------------------------------------------------------------
-	inline unsigned char DialogFlagA() { return *reinterpret_cast<const unsigned char*>(0xA83D48); }
-	inline unsigned char DialogFlagB() { return *reinterpret_cast<const unsigned char*>(0xA83D49); }
-	inline unsigned char DialogFlagC() { return *reinterpret_cast<const unsigned char*>(0xA8ECD0); }
-	inline unsigned char DialogFlagD() { return *reinterpret_cast<const unsigned char*>(0x8B41C0); }
+	inline unsigned char OverFlagExit()     { return *reinterpret_cast<const unsigned char*>(0xA83D48); }
+	inline unsigned char OverFlagWon()      { return *reinterpret_cast<const unsigned char*>(0xA83D49); }
+	inline unsigned char OverFlagDefeated() { return *reinterpret_cast<const unsigned char*>(0xA8ECD0); }
+	inline unsigned char OverFlagAbort()    { return *reinterpret_cast<const unsigned char*>(0x8B41C0); }
 
 	// One buffered observation. Written every invocation, flushed in batches so
 	// we never do file IO on most render calls.
@@ -66,17 +81,31 @@ namespace
 		unsigned int Tick;   // GetTickCount(), to expose wall-clock gaps
 		unsigned int Esp;    // stack depth - THE re-entrancy signal, see below
 		unsigned char IsPaused;
-		unsigned char Flags; // bit0..bit3 = dialog gates A..D
+		unsigned char Flags; // bit0..bit3 = game-over flags exit/won/defeated/abort
 	};
 
 	ObsRecord obsBuf[HarnessProbe::MaxObsRecords];
 	int obsCount = 0;
 
-	// Per-session state. Everything here resets when the session nonce changes.
-	int sessionNonce = 0;
+	// --- Per-session state. Reset by ResetSession() at a detected game boundary.
+	//
+	// sessionId is MINTED (GetTickCount), never read from the engine - see the
+	// session-identity note in HarnessProbe.h for why borrowing UniqueID was
+	// wrong and what it cost.
+	int sessionId = 0;
 	bool sessionOpen = false;
-	int nextCommandId = 1;
 	int lastFrame = -1;
+
+	// --- Per-PROCESS state. Deliberately NOT reset on a new session.
+	//
+	// Rewinding the command scanner is what let the old build rescan a stale
+	// inbox and emit 978 terminal acks for 7 commands. The id namespace is flat
+	// across the whole process run; the controller resumes from next_command in
+	// status.txt, so it never needs the counter to rewind.
+	int nextCommandId = 1;
+
+	// Last non-sentinel Scenario->UniqueID, for boundary detection only.
+	int lastUniqueId = -1;
 	unsigned int lastObsFlushTick = 0;
 	unsigned int lastStatusTick = 0;
 	int lastObsFlushFrame = 0;
@@ -98,6 +127,7 @@ namespace
 	int ackWriteFailures = 0;
 	int statusWriteFailures = 0;
 	int duplicatesSuppressed = 0;
+	int consumeFailures = 0;   // .cmd -> .done rename failed; rescan hazard re-armed
 
 	// Exactly-once bookkeeping: bit i set once command id (i+1) reached a
 	// terminal ack. Fixed storage, never grows.
@@ -192,12 +222,13 @@ namespace
 			"session=%d\nframe=%d\ntick=%u\ninvocations=%d\nframes_advanced=%d\n"
 			"no_advance=%d\nnext_command=%d\nwaiting_since_frame=%d\nended=%d\n"
 			"obs_dropped=%d\nflush_failures=%d\nack_write_failures=%d\n"
-			"status_write_failures=%d\nduplicates_suppressed=%d\n",
-			sessionNonce, frame, static_cast<unsigned int>(GetTickCount()),
+			"status_write_failures=%d\nduplicates_suppressed=%d\n"
+			"consume_failures=%d\n",
+			sessionId, frame, static_cast<unsigned int>(GetTickCount()),
 			hookInvocations, framesAdvanced, noAdvanceInvocations,
 			nextCommandId, waitingSinceFrame, ended ? 1 : 0,
 			obsDropped, flushFailures, ackWriteFailures,
-			statusWriteFailures, duplicatesSuppressed);
+			statusWriteFailures, duplicatesSuppressed, consumeFailures);
 		std::fclose(pFile);
 
 		// Atomic publication, same discipline we require of the controller. A
@@ -231,7 +262,7 @@ namespace
 		// as whitespace-separated KEY=value tokens.
 		std::fprintf(pFile,
 			"id=%d status=%s reason=%s requested_frame=%d actual_frame=%d session=%d\n",
-			id, status, reason, requestedFrame, actualFrame, sessionNonce);
+			id, status, reason, requestedFrame, actualFrame, sessionId);
 		std::fclose(pFile);
 		return true;
 	}
@@ -278,11 +309,15 @@ namespace
 	// The scanner is strictly in-order and never re-opens a consumed file, so
 	// exactly-once actually rests on nextCommandId monotonicity and the seenMask
 	// path is otherwise unreachable - which would make any "duplicate
-	// suppressed" claim vacuous. A consumed file also stays on disk, so mere
-	// existence proves nothing. What does prove it is the LAST-WRITE TIME: the
-	// controller republishes by writing a .tmp and renaming over the original,
-	// which changes the timestamp. A changed timestamp on an already-consumed
-	// id is a genuine duplicate that we are declining to re-execute.
+	// suppressed" claim vacuous. This watch is what makes it non-vacuous.
+	//
+	// Since a consumed command is renamed .cmd -> .done, the .cmd path normally
+	// stops existing and this returns early. If it REAPPEARS, the controller has
+	// republished that id - a genuine duplicate we are declining to re-execute.
+	// (Before the rename existed, the file stayed on disk and mere existence
+	// proved nothing, so the test was against the last-write time instead; that
+	// comparison is kept, and now also covers a republish that lands on top of a
+	// rename that failed.)
 	bool GetWriteTime(const char* path, FILETIME& out)
 	{
 		WIN32_FILE_ATTRIBUTE_DATA data;
@@ -321,11 +356,21 @@ namespace
 	bool TryConsumeCommand(int id, int frame)
 	{
 		char path[MAX_PATH];
+		char donePath[MAX_PATH];
 		std::snprintf(path, sizeof(path), "%s\\inbox\\%06d.cmd", HarnessProbe::Dir, id);
+		std::snprintf(donePath, sizeof(donePath), "%s\\inbox\\%06d.done", HarnessProbe::Dir, id);
 
 		FILE* pFile = std::fopen(path, "rb");
 		if (!pFile)
+		{
+			// No .cmd. If a .done is sitting there, this id was already consumed
+			// in an earlier run of this process - advance past it silently rather
+			// than stalling the scanner. Without this the scanner would block
+			// forever on a gap, since consumed files no longer answer to .cmd.
+			if (GetFileAttributesA(donePath) != INVALID_FILE_ATTRIBUTES)
+				return true;
 			return false;
+		}
 
 		// The file exists. Because the controller publishes by rename, an
 		// openable file is complete - we never see a partial write.
@@ -362,7 +407,7 @@ namespace
 			{
 				acked = WriteAck(id, "rejected", "missing-session", 0, frame);
 			}
-			else if (std::atoi(buf) != sessionNonce)
+			else if (std::atoi(buf) != sessionId)
 			{
 				acked = WriteAck(id, "rejected", "stale-session", 0, frame);
 			}
@@ -446,18 +491,40 @@ namespace
 		lastConsumedId = id;
 		if (!GetWriteTime(path, lastConsumedWrite))
 			lastConsumedWrite.dwLowDateTime = lastConsumedWrite.dwHighDateTime = 0;
+
+		// --- CONSUME. Rename .cmd -> .done only AFTER a terminal ack is on disk,
+		// so the crash window can only ever duplicate an ack, never lose a
+		// command. This is the second half of the 978-ack fix: even if the
+		// scanner is somehow rewound, a consumed command no longer answers to
+		// .cmd and cannot be re-acked. Renaming rather than deleting keeps the
+		// staged command in the evidence bundle.
+		//
+		// A failed rename is NOT fatal - the ack is already written and
+		// exactly-once still holds via seenMask and the monotonic scanner - but
+		// it is counted, because it silently re-arms the rescan hazard.
+		if (!MoveFileExA(path, donePath, MOVEFILE_REPLACE_EXISTING))
+		{
+			++consumeFailures;
+			Debug::Log("[HarnessProbe] Could not rename %s -> .done (id=%d)\n", path, id);
+		}
 		return true;
 	}
 
-	void ResetSession(int nonce)
+	void ResetSession()
 	{
 		// Flush the outgoing session's tail BEFORE dropping it on the floor -
 		// the end of a session is exactly where the pause/dialog evidence sits.
 		FlushObs();
 
-		sessionNonce = nonce;
+		// MINT the identity. GetTickCount is monotonic within a process run, so
+		// two sessions can never collide, and it cannot drift mid-game the way
+		// Scenario->UniqueID does. Masked to stay positive so it round-trips
+		// through "%d" and std::atoi in the command files.
+		sessionId = static_cast<int>(GetTickCount() & 0x7FFFFFFF);
 		sessionOpen = true;
-		nextCommandId = 1;
+		// NOTE: nextCommandId and seenMask are per-PROCESS and deliberately NOT
+		// reset here. Rewinding them is what made the old build rescan a stale
+		// inbox and emit a terminal ack per command per reset.
 		hookInvocations = 0;
 		framesAdvanced = 0;
 		noAdvanceInvocations = 0;
@@ -476,8 +543,9 @@ namespace
 		ackWriteFailures = 0;
 		statusWriteFailures = 0;
 		duplicatesSuppressed = 0;
-		std::memset(seenMask, 0, sizeof(seenMask));
-		Debug::Log("[HarnessProbe] New session, nonce=%d\n", nonce);
+		consumeFailures = 0;
+		Debug::Log("[HarnessProbe] New session, id=%d (next command id stays %d)\n",
+			sessionId, nextCommandId);
 	}
 }
 
@@ -494,23 +562,42 @@ void HarnessProbe::PerFrame()
 	if (frame < 0)
 		return;
 
-	// --- Session identity. Scenario->UniqueID is a per-game random salt, so a
-	// change means a different game - unambiguously, with no false negative
-	// when a new game starts at a higher frame than the old one ended.
+	// --- New-game boundary detection.
 	//
-	// The frame-runs-backwards test is kept as belt-and-braces: if the nonce
-	// ever failed to change between games, the stale-session spike would
-	// otherwise report a silent false PASS, which is the single most
-	// misleading outcome available here.
-	const int nonce = pScenario->UniqueID;
-	const bool wentBackwards = (lastFrame >= 0 && frame < lastFrame);
-	if (!sessionOpen || nonce != sessionNonce || wentBackwards)
+	// We do NOT compare an engine field against a stored identity - that is the
+	// bug that produced 978 acks for 7 commands, because Scenario->UniqueID
+	// drifts constantly within a game (it is the object-ID allocator; see
+	// HarnessProbe.h). We look only for a BOUNDARY, using two independent
+	// signals, either sufficient on its own:
+	//
+	//   1. UniqueID decreased. Within a game it only ever increments; at scenario
+	//      start it is reset DOWN to exactly 1,000,000 (0x683633). So a decrease
+	//      is a proven new game, and unlike the frame test it still fires if a
+	//      new game somehow starts at a higher frame than the old one ended.
+	//   2. CurrentFrame decreased. The classic heuristic, kept as belt and braces.
+	//
+	// Sentinel windows: 0x4D7F42 and 0x4AD05F temporarily park -3 in UniqueID and
+	// restore it afterwards. A negative reading is therefore never a boundary -
+	// we neither test against it nor remember it.
+	const int uniqueId = pScenario->UniqueID;
+	const bool sentinel = (uniqueId < 0);
+
+	bool newGame = !sessionOpen;
+	if (!newGame && !sentinel && lastUniqueId >= 0 && uniqueId < lastUniqueId)
+		newGame = true;
+	if (!newGame && lastFrame >= 0 && frame < lastFrame)
+		newGame = true;
+
+	if (newGame)
 	{
 		dirsCreated = false;
 		EnsureDirs();
-		ResetSession(nonce);
+		ResetSession();
 		lastFrame = -1;
 	}
+
+	if (!sentinel)
+		lastUniqueId = uniqueId;
 
 	++hookInvocations;
 
@@ -536,17 +623,17 @@ void HarnessProbe::PerFrame()
 	if (obsCount < HarnessProbe::MaxObsRecords)
 	{
 		ObsRecord& r = obsBuf[obsCount++];
-		r.Session = sessionNonce;
+		r.Session = sessionId;
 		r.Frame = frame;
 		r.PauseCount = static_cast<int>(pScenario->unknown_62C);
 		r.Tick = nowTick;
 		r.Esp = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(_AddressOfReturnAddress()));
 		r.IsPaused = static_cast<unsigned char>(pScenario->IsGamePaused ? 1 : 0);
 		r.Flags = static_cast<unsigned char>(
-			(DialogFlagA() ? 0x01 : 0) |
-			(DialogFlagB() ? 0x02 : 0) |
-			(DialogFlagC() ? 0x04 : 0) |
-			(DialogFlagD() ? 0x08 : 0));
+			(OverFlagExit()     ? 0x01 : 0) |
+			(OverFlagWon()      ? 0x02 : 0) |
+			(OverFlagDefeated() ? 0x04 : 0) |
+			(OverFlagAbort()    ? 0x08 : 0));
 	}
 	else
 	{

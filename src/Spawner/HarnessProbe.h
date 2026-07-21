@@ -31,22 +31,24 @@
 // It answers three questions that the static RE left open or could only assert:
 //
 //   Spike B (confirmatory) - does this dispatch point (0x55DDA0) fire while the
-//     game is paused, and is it 1:1 with logic frames? Static RE says NO to the
-//     first (MainLoop returns at 0x55D877, before this address, whenever
-//     Scenario->unknown_62C != 0) and "1:1 except during modal UI" to the
-//     second. Each invocation records the frame, the pause counter, the
-//     IsGamePaused flag, the four modal-dialog gate bytes, and a wall clock, so
-//     a pause shows up as a large time gap with no frames and a modal dialog
-//     shows up as repeated records at one frame.
+//     game is paused? ANSWERED 2026-07-21: no. But the mechanism is not the one
+//     originally proposed - Scenario->unknown_62C was never nonzero across
+//     23,658 records, so the 0x55D877 early-return is never exercised in
+//     skirmish. No player-reachable skirmish action pauses via +0x62C at all
+//     (PauseGame @0x684060 has four callers, all movie/map-trigger paths). The
+//     Esc options screen goes quiet because it runs OUTSIDE MainLoop entirely.
 //
-//   Spike A - is MainLoop re-entrancy from modal UI pumps reachable in normal
-//     play? Note this CANNOT be measured by nesting our own handler: a pump
-//     entered earlier in the outer MainLoop has not yet reached this hook and
-//     one entered later has already left it, so the handler is never on the
-//     stack twice and a naive depth counter is pinned at 1 by construction.
-//     The observable that does work is the STACK POINTER: a nested MainLoop
-//     activation runs at a markedly lower ESP, so re-entrancy appears as
-//     records at one frame in a distinctly different `esp` band.
+//   Spike A - is MainLoop re-entrancy reachable? ANSWERED 2026-07-21: no, in any
+//     game mode. 0xABCD58 is a real re-entry lock - MainLoop sets it at entry and
+//     clears it at all three exits, and all five secondary call sites test it via
+//     the accessor at 0x55CBF0 before calling. 0x55D360 is also never
+//     address-taken, so there is no indirect route in.
+//     The `esp` column stays because it is the only observable that COULD show
+//     re-entrancy: it cannot be measured by nesting our own handler (a pump
+//     entered earlier in the outer MainLoop has not yet reached this hook and one
+//     entered later has already left it, so a depth counter reads 1 by
+//     construction). A nested activation would run at a markedly lower ESP.
+//     Observed: one constant band across 23,658 records, as predicted.
 //
 //   Spike C - does the transactional transport contract hold end to end?
 //     Session nonce, monotonic command IDs, atomic publication, exactly-once
@@ -85,11 +87,36 @@
 // retried - because consuming without a terminal ack would strand the
 // controller forever, the one failure the transport contract forbids outright.
 //
-// The session nonce is ScenarioClass::Instance->UniqueID (YRpp: "random salt
-// for this game's communications"), which is a strictly better new-game
-// discriminator than the frame-counter-runs-backwards heuristic the other dump
-// hooks use: it cannot false-negative when a new game happens to start at a
-// higher frame.
+// A command that DOES reach a terminal ack is renamed .cmd -> .done, so a
+// rescan can never re-ack it. See the session-identity note below for why that
+// matters; the 2026-07-21 capture produced 978 terminal acks for 7 commands
+// without it.
+//
+// SESSION IDENTITY - minted here, not borrowed from the engine.
+//
+// An earlier version used ScenarioClass::Instance->UniqueID as the session
+// nonce, on the strength of the YRpp comment calling it a "random salt for this
+// game's communications". That is wrong, and the 2026-07-21 capture disproved it
+// directly. UniqueID is the AbstractClass object-ID allocator: 37 object
+// constructors reach ++Scenario->UniqueID via Get_New_UniqueID @0x68BCB0. It is
+// reset to exactly 1,000,000 at each scenario start (0x683633), so its value is
+// essentially the map-load object count - a function of map dimensions. Measured:
+// it drifted 305 WITHIN one game while moving only +2/+3 BETWEEN games, and both
+// new games collided with values an earlier game had held. It cannot identify a
+// session, pinned or otherwise; the dangerous failure is a stale command being
+// falsely ACCEPTED into a later game.
+//
+// So identity is minted (GetTickCount at session open) and only the BOUNDARY is
+// read from the engine, using two independent signals, either sufficient alone:
+//   - UniqueID decreases. It only ever increments within a game and is reset
+//     downward at scenario start, so any decrease is a proven boundary.
+//     (Ignore negative readings: 0x4D7F42 and 0x4AD05F park -3 in the field
+//     temporarily and restore it.)
+//   - CurrentFrame decreases. The classic heuristic, kept as belt and braces.
+//
+// Command IDs are a flat PER-PROCESS namespace and deliberately do NOT rewind on
+// a new session - rewinding the scanner is what made the old build rescan and
+// re-ack a stale inbox.
 class HarnessProbe
 {
 public:
@@ -104,7 +131,13 @@ public:
 	// Hard caps. Bounded work per invocation is a review requirement: this
 	// runs on a render call and must never poll or parse without a ceiling.
 	static constexpr int MaxScanPerFrame = 4;      // inbox probes per invocation
-	static constexpr int MaxCommands = 512;        // command IDs tracked per session
+
+	// Command IDs tracked. This is a PER-PROCESS budget, not per-session: the id
+	// namespace no longer rewinds at a game boundary (see the session-identity
+	// note above), so a long multi-game run draws from one pool. Sized well above
+	// any plausible spike or Phase-1 run; seenMask costs MaxCommands/8 bytes.
+	// Exhaustion is loud (Debug::Log + ended=1 in status.txt), never silent.
+	static constexpr int MaxCommands = 4096;
 	static constexpr int MaxObsRecords = 2048;     // buffered frame observations
 	static constexpr int MaxCmdFileBytes = 512;    // refuse anything larger
 
