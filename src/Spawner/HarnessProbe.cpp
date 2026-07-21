@@ -19,6 +19,8 @@
 
 #include "HarnessProbe.h"
 #include "HarnessManifest.h"
+#include "HarnessSnapshot.h"
+#include "CellDump.h"
 
 #include <Helpers/Macro.h>
 #include <Utilities/Debug.h>
@@ -455,6 +457,32 @@ namespace
 					char reason[64];
 					std::snprintf(reason, sizeof(reason), "technos=%d", TechnoClass::Array.Count);
 					acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+				}
+				else if (std::strcmp(buf, "snapshot") == 0)
+				{
+					if (HarnessSnapshot::Write(HarnessProbe::Dir, sessionId, frame, id))
+						acked = WriteAck(id, "executed", "snapshot-written", requestedFrame, frame);
+					else
+						acked = WriteAck(id, "failed", "snapshot-write-failed", requestedFrame, frame);
+				}
+				else if (std::strcmp(buf, "dump-cells") == 0)
+				{
+					// Schedule STRICTLY ahead, never the current frame: four
+					// Syringe tenants share 0x55DDA0 and chain order is not ours
+					// to control, so CellDump::PerFrame may already have run this
+					// invocation. frame+1 is order-independent.
+					const int target = frame + 1;
+					if (CellDump::FrameCount >= CellDump::MaxDumpFrames)
+					{
+						acked = WriteAck(id, "rejected", "celldump-full", requestedFrame, frame);
+					}
+					else
+					{
+						CellDump::Frames[CellDump::FrameCount++] = target;
+						char reason[64];
+						std::snprintf(reason, sizeof(reason), "celldump-at=%d", target);
+						acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+					}
 				}
 				else if (std::strcmp(buf, "fail-test") == 0)
 				{
