@@ -18,6 +18,7 @@
 */
 
 #include "HarnessProbe.h"
+#include "HarnessManifest.h"
 
 #include <Helpers/Macro.h>
 #include <Utilities/Debug.h>
@@ -522,6 +523,7 @@ namespace
 		// through "%d" and std::atoi in the command files.
 		sessionId = static_cast<int>(GetTickCount() & 0x7FFFFFFF);
 		sessionOpen = true;
+		HarnessManifest::Write(HarnessProbe::Dir, sessionId);
 		// NOTE: nextCommandId and seenMask are per-PROCESS and deliberately NOT
 		// reset here. Rewinding them is what made the old build rescan a stale
 		// inbox and emit a terminal ack per command per reset.
