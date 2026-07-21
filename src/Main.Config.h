@@ -36,6 +36,8 @@ public:
 	int SyncDumpMaxFrames;
 	char AstarDumpMode[8];
 	char CellDumpFrames[128];
+	bool HarnessProbeEnabled;
+	char HarnessDir[64];
 
 	// Video
 	bool NoWindowFrame;
@@ -63,6 +65,8 @@ public:
 		, SyncDumpMaxFrames { 5000 }
 		, AstarDumpMode { "no" }
 		, CellDumpFrames { "" }
+		, HarnessProbeEnabled { false }
+		, HarnessDir { "HARNESS" }
 
 		// Video
 		, DDrawTargetFPS { -1 }

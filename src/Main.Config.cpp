@@ -20,6 +20,7 @@
 #include "Main.Config.h"
 #include <Spawner/AstarDump.h>
 #include <Spawner/CellDump.h>
+#include <Spawner/HarnessProbe.h>
 #include <Spawner/SyncDump.h>
 #include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
@@ -54,6 +55,8 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
 		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
 		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
+		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
+		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
 	}
 
 	const char* pVideoSection = "Video";
@@ -111,6 +114,26 @@ void MainConfig::ApplyStaticOptions()
 	{
 		AstarDump::Enable = false;
 		AstarDump::CaptureMode = AstarDump::Mode::Disabled;
+	}
+
+	// HARNESS.Probe=yes - read-only driving-harness evidence probe
+	// (Spawner/HarnessProbe.cpp). HARNESS.Dir names its working directory
+	// relative to the game dir. Off by default; strictly read-only, so it is
+	// safe to leave armed alongside the dump hooks.
+	{
+		HarnessProbe::Enable = this->HarnessProbeEnabled;
+		if (HarnessProbe::Enable)
+		{
+			// Fixed-size copy into DLL-owned storage; always NUL-terminated.
+			std::strncpy(HarnessProbe::Dir, this->HarnessDir, HarnessProbe::MaxDirLen - 1);
+			HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
+			if (!HarnessProbe::Dir[0])
+			{
+				std::strncpy(HarnessProbe::Dir, "HARNESS", HarnessProbe::MaxDirLen - 1);
+				HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
+			}
+			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only)\n", HarnessProbe::Dir);
+		}
 	}
 
 	// CELLDUMP.Frames=<frame>[,<frame>...] - whole-map per-cell pathfinding
