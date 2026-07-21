@@ -19,6 +19,7 @@
 
 #include "HarnessProbe.h"
 #include "HarnessManifest.h"
+#include "HarnessOrders.h"
 #include "HarnessSnapshot.h"
 #include "CellDump.h"
 
@@ -491,6 +492,48 @@ namespace
 						char reason[64];
 						std::snprintf(reason, sizeof(reason), "celldump-at=%d", target);
 						acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+					}
+				}
+				else if (std::strcmp(buf, "move") == 0)
+				{
+					// The only state-mutating verb. Every non-Ok outcome is a
+					// terminal `rejected`, not `failed`: each one means "the
+					// harness declined to act, and here is exactly why".
+					// `failed` stays reserved for our own machinery breaking,
+					// the way snapshot-write-failed does.
+					char argBuf[64];
+
+					unsigned int uid = 0;
+					int cellX = -1;
+					int cellY = -1;
+					bool argsOk = true;
+
+					if (ReadKey(body, "uid", argBuf, sizeof(argBuf)))
+						uid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "x", argBuf, sizeof(argBuf)))
+						cellX = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "y", argBuf, sizeof(argBuf)))
+						cellY = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-move-args",
+							requestedFrame, frame);
+					}
+					else
+					{
+						const OrderResult result = HarnessOrders::Move(uid, cellX, cellY);
+						acked = WriteAck(id,
+							result == OrderResult::Ok ? "executed" : "rejected",
+							HarnessOrders::ResultReason(result), requestedFrame, frame);
 					}
 				}
 				else if (std::strcmp(buf, "fail-test") == 0)
