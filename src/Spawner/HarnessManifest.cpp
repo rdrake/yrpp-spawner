@@ -50,6 +50,9 @@ void HarnessManifest::Write(const char* dir, int sessionId)
 		"protocol_version=%d\n"
 		"session=%d\n"
 		"game_mode=%d\n"
+		// Game::Seed, not Unsorted::Seed as the brief had it - Seed is declared
+		// on class Game in Unsorted.h (see CellDump.cpp/SyncDump.cpp, the two
+		// other consumers). CI caught the wrong qualifier on the first push.
 		"seed=%08X\n"
 		"celldump_enabled=%d\n"
 		"syncdump_enabled=%d\n"
@@ -58,7 +61,7 @@ void HarnessManifest::Write(const char* dir, int sessionId)
 		ProtocolVersion,
 		sessionId,
 		static_cast<int>(SessionClass::Instance.GameMode),
-		static_cast<unsigned int>(Unsorted::Seed),
+		static_cast<unsigned int>(Game::Seed),
 		CellDump::Enable ? 1 : 0,
 		SyncDump::Enable ? 1 : 0,
 		SyncDump::ComputeCRC ? 1 : 0,
