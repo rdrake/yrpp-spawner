@@ -23,7 +23,11 @@
 #include <Utilities/Debug.h>
 
 #include <ScenarioClass.h>
-#include <TechnoClass.h>
+// FootClass.h, not TechnoClass.h: the latter instantiates the generic_cast
+// helpers in YRpp/Helpers/Cast.h, which static_assert on a COMPLETE FootClass.
+// Including TechnoClass.h alone fails to compile. This is the same include the
+// other TechnoClass consumers use (src/Misc/Bugfixes.OpenTopCloak.cpp).
+#include <FootClass.h>
 #include <Unsorted.h>
 
 #include <Windows.h>
