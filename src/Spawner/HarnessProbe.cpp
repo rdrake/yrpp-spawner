@@ -43,6 +43,7 @@
 
 bool HarnessProbe::Enable = false;
 char HarnessProbe::Dir[HarnessProbe::MaxDirLen] = "HARNESS";
+int HarnessProbe::PinnedSeed = 0;
 
 namespace
 {
@@ -388,6 +389,23 @@ namespace
 		if (WasSeen(id))
 		{
 			++duplicatesSuppressed;
+
+			// CONSUME THE DUPLICATE TOO. Returning here without the rename used
+			// to leave a republished .cmd on disk indefinitely. seenMask made
+			// that harmless within the process -- but it is per-process, so the
+			// NEXT game process starts with an empty mask, walks the inbox from
+			// id 1 again, finds the survivor, and emits a second terminal ack
+			// for an id that already had one. Measured 2026-07-21: id=1 picked
+			// up an `executed` in one game and a `stale-session` in the next.
+			//
+			// Only the session check stopped that being a re-EXECUTION. A
+			// duplicate carrying the current session id would have re-run.
+			if (!MoveFileExA(path, donePath, MOVEFILE_REPLACE_EXISTING))
+			{
+				++consumeFailures;
+				Debug::Log("[HarnessProbe] Could not rename duplicate %s -> .done (id=%d)\n",
+					path, id);
+			}
 			return true;
 		}
 		MarkSeen(id);

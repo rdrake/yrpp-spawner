@@ -57,6 +57,7 @@ void MainConfig::LoadFromINIFile()
 		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
+		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
 	}
 
 	const char* pVideoSection = "Video";
@@ -133,6 +134,38 @@ void MainConfig::ApplyStaticOptions()
 				HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
 			}
 			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only)\n", HarnessProbe::Dir);
+		}
+	}
+
+	// HARNESS.Seed=<int> - pin the simulation RNG so a scenario can be replayed.
+	//
+	// spawn.ini's Seed= does NOT do this: Spawner::GetConfig()->Seed feeds only
+	// random-MAP generation (RandomMap.cpp). The simulation draws from
+	// Game::Seed (0xA8ED94), which in single player is seeded from the system
+	// timer and pinned by nothing -- two identical skirmishes diverge.
+	//
+	// The engine already has a dormant override slot for exactly this. At
+	// 0x52FDD4, immediately before Game::Seed is assigned:
+	//
+	//     mov  eax, [0xA8ED98]     ; preset seed
+	//     test eax, eax
+	//     jne  0x52FDF4            ; nonzero -> use it verbatim
+	//     ...  call [0x7E1138]     ; else the system timer
+	//     mov  [0xA8ED94], eax     ; Game::Seed = eax
+	//
+	// 0xA8ED98 has exactly ONE reference in the whole image -- that read. No
+	// engine code ever writes it, so it is permanently zero in stock play.
+	// Storing to it here therefore needs no hook and cannot race the engine:
+	// the value simply survives until each scenario picks it up.
+	//
+	// Zero (the default) is indistinguishable from "unset" to the engine, so
+	// it means "leave stock behaviour alone" -- a seed of 0 cannot be pinned.
+	{
+		HarnessProbe::PinnedSeed = this->HarnessSeed;
+		if (HarnessProbe::PinnedSeed != 0)
+		{
+			*reinterpret_cast<int*>(0xA8ED98) = HarnessProbe::PinnedSeed;
+			Debug::Log("[HarnessProbe] Seed pinned to %08X\n", HarnessProbe::PinnedSeed);
 		}
 	}
 

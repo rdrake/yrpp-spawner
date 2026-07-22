@@ -38,6 +38,7 @@ public:
 	char CellDumpFrames[128];
 	bool HarnessProbeEnabled;
 	char HarnessDir[64];
+	int HarnessSeed;
 
 	// Video
 	bool NoWindowFrame;
@@ -67,6 +68,7 @@ public:
 		, CellDumpFrames { "" }
 		, HarnessProbeEnabled { false }
 		, HarnessDir { "HARNESS" }
+		, HarnessSeed { 0 }
 
 		// Video
 		, DDrawTargetFPS { -1 }

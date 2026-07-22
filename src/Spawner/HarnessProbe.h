@@ -128,6 +128,12 @@ public:
 	static constexpr int MaxDirLen = 64;
 	static char Dir[MaxDirLen];
 
+	// HARNESS.Seed, or 0 for "leave the engine's stock behaviour alone".
+	// Recorded here purely so the manifest can state whether a run's seed was
+	// pinned or drifted in from the system timer; the pin itself is applied
+	// once at config time (Main.Config.cpp) by storing to 0xA8ED98.
+	static int PinnedSeed;
+
 	// Hard caps. Bounded work per invocation is a review requirement: this
 	// runs on a render call and must never poll or parse without a ceiling.
 	static constexpr int MaxScanPerFrame = 4;      // inbox probes per invocation

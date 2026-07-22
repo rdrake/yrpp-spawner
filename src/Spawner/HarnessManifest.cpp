@@ -20,6 +20,7 @@
 #include "HarnessManifest.h"
 
 #include "CellDump.h"
+#include "HarnessProbe.h"
 #include "SyncDump.h"
 // Brief's Step 2a verify-first check: the brief names this AStarDump.h /
 // AStarDump::Enable, but on this branch the hook module is spelled AstarDump
@@ -54,6 +55,10 @@ void HarnessManifest::Write(const char* dir, int sessionId)
 		// on class Game in Unsorted.h (see CellDump.cpp/SyncDump.cpp, the two
 		// other consumers). CI caught the wrong qualifier on the first push.
 		"seed=%08X\n"
+		// Whether that seed was pinned (HARNESS.Seed) or drifted in from the
+		// system timer. Without this a reader cannot tell a reproducible run
+		// from one that merely happened to be compared against itself.
+		"seed_pinned=%d\n"
 		"celldump_enabled=%d\n"
 		"syncdump_enabled=%d\n"
 		"syncdump_compute_crc=%d\n"
@@ -62,6 +67,7 @@ void HarnessManifest::Write(const char* dir, int sessionId)
 		sessionId,
 		static_cast<int>(SessionClass::Instance.GameMode),
 		static_cast<unsigned int>(Game::Seed),
+		HarnessProbe::PinnedSeed != 0 ? 1 : 0,
 		CellDump::Enable ? 1 : 0,
 		SyncDump::Enable ? 1 : 0,
 		SyncDump::ComputeCRC ? 1 : 0,
