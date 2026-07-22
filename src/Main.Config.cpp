@@ -18,11 +18,19 @@
 */
 
 #include "Main.Config.h"
+#include <Spawner/AstarDump.h>
+#include <Spawner/CellDump.h>
+#include <Spawner/HarnessProbe.h>
+#include <Spawner/SyncDump.h>
+#include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
 
 #include <CCINIClass.h>
 #include <GameOptionsClass.h>
 #include <Unsorted.h>
+
+#include <cstdlib>
+#include <cstring>
 
 void MainConfig::LoadFromINIFile()
 {
@@ -42,6 +50,14 @@ void MainConfig::LoadFromINIFile()
 		this->SingleProcAffinity   = pINI->ReadBool(pOptionsSection, "SingleProcAffinity", this->SingleProcAffinity);
 		this->SkipScoreScreen      = pINI->ReadBool(pOptionsSection, "SkipScoreScreen", this->SkipScoreScreen);
 		this->SpeedControl         = pINI->ReadBool(pOptionsSection, "SpeedControl", this->SpeedControl);
+		this->SyncDump             = pINI->ReadBool(pOptionsSection, "SYNCDUMP", this->SyncDump);
+		this->SyncDumpComputeCRC   = pINI->ReadBool(pOptionsSection, "SYNCDUMP.ComputeCRC", this->SyncDumpComputeCRC);
+		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
+		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
+		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
+		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
+		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
+		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
 	}
 
 	const char* pVideoSection = "Video";
@@ -71,6 +87,119 @@ void MainConfig::ApplyStaticOptions()
 		Patch::Apply_TYPED<DWORD>(0x542CF7, { 372 });
 		Patch::Apply_TYPED<DWORD>(0x542D5E, { 382 });
 		Patch::Apply_TYPED<DWORD>(0x542DC2, { 392 });
+	}
+
+	if (this->SyncDump)
+	{
+		// Arm the retail per-frame sync recording (Game::LogFrameCRC) even if
+		// MPDEBUG is off; the dump hook itself lives in Spawner/SyncDump.cpp.
+		Game::EnableMPSyncDebug = true;
+		SyncDump::Enable = true;
+		SyncDump::ComputeCRC = this->SyncDumpComputeCRC;
+		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
+	}
+
+	if (_stricmp(this->AstarDumpMode, "yes") == 0)
+	{
+		AstarDump::Enable = true;
+		AstarDump::CaptureMode = AstarDump::Mode::Narrow;
+		Debug::Log("[AstarDump] Armed (mode=narrow)\n");
+	}
+	else if (_stricmp(this->AstarDumpMode, "all") == 0)
+	{
+		AstarDump::Enable = true;
+		AstarDump::CaptureMode = AstarDump::Mode::All;
+		Debug::Log("[AstarDump] Armed (mode=all)\n");
+	}
+	else
+	{
+		AstarDump::Enable = false;
+		AstarDump::CaptureMode = AstarDump::Mode::Disabled;
+	}
+
+	// HARNESS.Probe=yes - read-only driving-harness evidence probe
+	// (Spawner/HarnessProbe.cpp). HARNESS.Dir names its working directory
+	// relative to the game dir. Off by default; strictly read-only, so it is
+	// safe to leave armed alongside the dump hooks.
+	{
+		HarnessProbe::Enable = this->HarnessProbeEnabled;
+		if (HarnessProbe::Enable)
+		{
+			// Fixed-size copy into DLL-owned storage; always NUL-terminated.
+			std::strncpy(HarnessProbe::Dir, this->HarnessDir, HarnessProbe::MaxDirLen - 1);
+			HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
+			if (!HarnessProbe::Dir[0])
+			{
+				std::strncpy(HarnessProbe::Dir, "HARNESS", HarnessProbe::MaxDirLen - 1);
+				HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
+			}
+			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only)\n", HarnessProbe::Dir);
+		}
+	}
+
+	// HARNESS.Seed=<int> - pin the simulation RNG so a scenario can be replayed.
+	//
+	// spawn.ini's Seed= does NOT do this: Spawner::GetConfig()->Seed feeds only
+	// random-MAP generation (RandomMap.cpp). The simulation draws from
+	// Game::Seed (0xA8ED94), which in single player is seeded from the system
+	// timer and pinned by nothing -- two identical skirmishes diverge.
+	//
+	// The engine already has a dormant override slot for exactly this. At
+	// 0x52FDD4, immediately before Game::Seed is assigned:
+	//
+	//     mov  eax, [0xA8ED98]     ; preset seed
+	//     test eax, eax
+	//     jne  0x52FDF4            ; nonzero -> use it verbatim
+	//     ...  call [0x7E1138]     ; else the system timer
+	//     mov  [0xA8ED94], eax     ; Game::Seed = eax
+	//
+	// 0xA8ED98 has exactly ONE reference in the whole image -- that read. No
+	// engine code ever writes it, so it is permanently zero in stock play.
+	// Storing to it here therefore needs no hook and cannot race the engine:
+	// the value simply survives until each scenario picks it up.
+	//
+	// Zero (the default) is indistinguishable from "unset" to the engine, so
+	// it means "leave stock behaviour alone" -- a seed of 0 cannot be pinned.
+	{
+		HarnessProbe::PinnedSeed = this->HarnessSeed;
+		if (HarnessProbe::PinnedSeed != 0)
+		{
+			*reinterpret_cast<int*>(0xA8ED98) = HarnessProbe::PinnedSeed;
+			Debug::Log("[HarnessProbe] Seed pinned to %08X\n", HarnessProbe::PinnedSeed);
+		}
+	}
+
+	// CELLDUMP.Frames=<frame>[,<frame>...] - whole-map per-cell pathfinding
+	// snapshots (Spawner/CellDump.cpp). Empty (the default) leaves it off.
+	// Malformed tokens are skipped; at most CellDump::MaxDumpFrames entries.
+	{
+		CellDump::FrameCount = 0;
+		const char* p = this->CellDumpFrames;
+		while (*p && CellDump::FrameCount < CellDump::MaxDumpFrames)
+		{
+			while (*p == ',' || *p == ' ')
+				++p;
+			if (!*p)
+				break;
+			char* end = nullptr;
+			const long v = strtol(p, &end, 10);
+			if (end == p)
+			{
+				// Non-numeric garbage: skip to the next separator.
+				while (*p && *p != ',')
+					++p;
+				continue;
+			}
+			if (v >= 0)
+				CellDump::Frames[CellDump::FrameCount++] = static_cast<int>(v);
+			p = end;
+		}
+		CellDump::Enable = (CellDump::FrameCount > 0);
+		if (CellDump::Enable)
+		{
+			Debug::Log("[CellDump] Armed (%d dump frame(s): %s)\n",
+				CellDump::FrameCount, this->CellDumpFrames);
+		}
 	}
 
 	if (this->SingleProcAffinity)

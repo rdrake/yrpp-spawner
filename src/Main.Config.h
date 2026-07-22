@@ -31,6 +31,14 @@ public:
 	bool SingleProcAffinity;
 	bool SkipScoreScreen;
 	bool SpeedControl;
+	bool SyncDump;
+	bool SyncDumpComputeCRC;
+	int SyncDumpMaxFrames;
+	char AstarDumpMode[8];
+	char CellDumpFrames[128];
+	bool HarnessProbeEnabled;
+	char HarnessDir[64];
+	int HarnessSeed;
 
 	// Video
 	bool NoWindowFrame;
@@ -53,6 +61,14 @@ public:
 		, SingleProcAffinity { true }
 		, SkipScoreScreen { false }
 		, SpeedControl { false }
+		, SyncDump { false }
+		, SyncDumpComputeCRC { true }
+		, SyncDumpMaxFrames { 5000 }
+		, AstarDumpMode { "no" }
+		, CellDumpFrames { "" }
+		, HarnessProbeEnabled { false }
+		, HarnessDir { "HARNESS" }
+		, HarnessSeed { 0 }
 
 		// Video
 		, DDrawTargetFPS { -1 }

@@ -63,6 +63,13 @@
     <ClCompile Include="$(ThisDir)\src\Spawner\Spawner.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\Spawner.Hook.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\Statistics.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\AstarDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\CellDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\HarnessManifest.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\HarnessOrders.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\HarnessProbe.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\HarnessSnapshot.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\SyncDump.cpp" />
     <!-- Utilities -->
     <ClCompile Include="$(ThisDir)\src\Utilities\Debug.cpp" />
     <ClCompile Include="$(ThisDir)\src\Utilities\Patch.cpp" />
@@ -88,6 +95,13 @@
     <ClInclude Include="$(ThisDir)\src\Spawner\ProtocolZero.LatencyLevel.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.Config.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\AstarDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\CellDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\HarnessManifest.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\HarnessOrders.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\HarnessProbe.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\HarnessSnapshot.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\SyncDump.h" />
     <!-- Utilities -->
     <ClInclude Include="$(ThisDir)\src\Utilities\Debug.h" />
     <ClInclude Include="$(ThisDir)\src\Utilities\DumperTypes.h" />
