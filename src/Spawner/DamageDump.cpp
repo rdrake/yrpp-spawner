@@ -186,8 +186,18 @@ void DamageDump::Emit(int output)
 // and the stack is at entry state ([ESP+0]=retaddr, [ESP+4]=armor,
 // [ESP+8]=distance -- confirmed from the disassembly's post-prologue 0x18/0x1c
 // reads).
+//
+// The patch window MUST be 6, not 5: the entry is
+//   0x489180 sub esp,0xC   (3)
+//   0x489183 push esi      (1)
+//   0x489184 mov esi,ecx   (2)   <- a 5-byte window splits this instruction
+// A 5-byte window ends mid-`mov esi,ecx`; Syringe copied the leftover byte
+// verbatim and the trampoline executed a bare 0xF1, crashing at first combat
+// (C0000005 in the trampoline). 6 steals three whole instructions, ending on
+// the 0x489186 boundary. Stealing them is harmless -- they run in the
+// trampoline after this hook returns 0, exactly as the original did.
 // ---------------------------------------------------------------------------
-DEFINE_HOOK(0x489180, MapClass_GetTotalDamage_DamageDumpEntry, 0x5)
+DEFINE_HOOK(0x489180, MapClass_GetTotalDamage_DamageDumpEntry, 0x6)
 {
 	GET(int, damage, ECX);
 	GET(WarheadTypeClass*, pWH, EDX);
