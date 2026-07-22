@@ -210,9 +210,19 @@ DEFINE_HOOK(0x489180, MapClass_GetTotalDamage_DamageDumpEntry, 0x6)
 	const bool warheadNull = (pWH == nullptr);
 	if (!warheadNull && armor >= 0 && armor < 0xB)
 	{
-		verses = pWH->Verses[armor];
-		cellspread = pWH->CellSpread;
-		percentatmax = pWH->PercentAtMax;
+		// Read the fields at the ENGINE's own offsets, exactly as GetTotalDamage
+		// does -- NOT via YRpp's WarheadTypeClass fields. YRpp's layout is off
+		// here: our first capture read Verses=1.0 where the engine's
+		// `fmul [edi+edx*8+0xA0]` used 0.2 (a `double Deform` sits before Verses
+		// in YRpp, so its Verses is not at +0xA0). Offsets from the 0x489180
+		// disassembly:
+		//   Verses[i]    = fmul qword [edi + i*8 + 0xA0]   (0x48923D)
+		//   CellSpread   = fld       [edi + 0x124]         (0x4891D8)
+		//   PercentAtMax = fmul      [edi + 0x12C]         (0x4891CE)
+		const char* whBase = reinterpret_cast<const char*>(pWH);
+		verses       = *reinterpret_cast<const double*>(whBase + 0xA0 + armor * 8);
+		cellspread   = *reinterpret_cast<const float*>(whBase + 0x124);
+		percentatmax = *reinterpret_cast<const float*>(whBase + 0x12C);
 	}
 
 	// The function's own cap: RulesClass::Instance->MaxDamage (+0x16C8). Guarded
