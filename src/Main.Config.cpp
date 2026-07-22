@@ -20,6 +20,7 @@
 #include "Main.Config.h"
 #include <Spawner/AstarDump.h>
 #include <Spawner/CellDump.h>
+#include <Spawner/DamageDump.h>
 #include <Spawner/HarnessProbe.h>
 #include <Spawner/SyncDump.h>
 #include <Utilities/Debug.h>
@@ -55,6 +56,7 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
 		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
 		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
+		this->DamageDump           = pINI->ReadBool(pOptionsSection, "DAMAGEDUMP", this->DamageDump);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
 		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
@@ -201,6 +203,11 @@ void MainConfig::ApplyStaticOptions()
 				CellDump::FrameCount, this->CellDumpFrames);
 		}
 	}
+
+	// DAMAGEDUMP=yes - trace every GetTotalDamage call (Spawner/DamageDump.cpp).
+	DamageDump::Enable = this->DamageDump;
+	if (DamageDump::Enable)
+		Debug::Log("[DamageDump] Armed\n");
 
 	if (this->SingleProcAffinity)
 	{
