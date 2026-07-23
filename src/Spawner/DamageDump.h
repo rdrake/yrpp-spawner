@@ -37,12 +37,13 @@
 //   ENTRY 0x489180 - stages inputs (damage=ECX, warhead=EDX, armor/distance on
 //                    the stack, the real CellSpread/PercentAtMax the stock
 //                    falloff uses, the Rules cap, the 0x00A8B230 no-damage flag).
-//   0x489229       - captures ESI = the stock falloff result, pre-max(0)-clamp
-//                    and pre-verses (BEFORE Ares' 0x489235 hook).
+//   0x489227       - captures ESI = the stock falloff result, pre-max(0)-clamp
+//                    and pre-verses (BEFORE Ares' 0x489235 hook; sited to end
+//                    at 0x48922D so it cannot overlap Phobos' sz5 hook there).
 //   0x489249       - captures EAX = the post-verses value entering the cap clamp
 //                    (AFTER Ares; may be unreached if Ares returns past it).
 //   EXIT (3 sites) - captures the final EAX and emits the row.
-// The 0x489229/0x489249 sites are only on the positive path, so heal/early-out
+// The 0x489227/0x489249 sites are only on the positive path, so heal/early-out
 // rows carry them as absent ("-"). The function is non-reentrant (its only
 // internal call is CRT _ftol), so a single pending slot is sound.
 //
@@ -78,10 +79,10 @@ public:
 		bool mapNoDamage;
 		bool warheadNull;
 		// Positive-path intermediates, captured between entry and exit. Reset by
-		// StageInputs; set by the 0x489229 / 0x489249 hooks; left absent on
+		// StageInputs; set by the 0x489227 / 0x489249 hooks; left absent on
 		// heal / early-out rows (which never reach those sites).
 		bool hasPreVerses;
-		int preVerses; // ESI @0x489229: stock falloff result, pre-clamp/pre-verses
+		int preVerses; // ESI @0x489227: stock falloff result, pre-clamp/pre-verses
 		bool hasScaled;
 		int scaled;    // EAX @0x489249: post-verses value entering the cap clamp
 	};

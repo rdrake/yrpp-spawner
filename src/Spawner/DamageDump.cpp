@@ -266,15 +266,20 @@ DEFINE_HOOK(0x489180, MapClass_GetTotalDamage_DamageDumpEntry, 0x6)
 // POSITIVE-PATH INTERMEDIATES. Both sites are on the positive branch only, so
 // heal / early-out calls never reach them and emit "-".
 //
-//   0x489229 (6) - ESI holds the stock falloff result (post-falloff, PRE the
+//   0x489227 (6) - ESI holds the stock falloff result (post-falloff, PRE the
 //                  0x48922F/0x489233 max(0) clamp and pre-verses). Window is
-//                  `mov edx,[esp+0x18]` (4) + `test esi,esi` (2), ending on the
-//                  0x48922F boundary. This is BEFORE Ares' 0x489235 hook, so it
-//                  is the genuine stock value the host checks bit-exact.
+//                  `xor ecx,ecx` (2) + `mov edx,[esp+0x18]` (4), ending on the
+//                  0x48922D boundary where Phobos' NegativeDamageModifiers2
+//                  (sz5) begins -- the previous 0x489229 sz6 site overlapped it
+//                  and the paired JMPs would corrupt each other. 0x489227 is a
+//                  jump target, but landing on the hook JMP itself is safe; a
+//                  scan shows no live target strictly inside the window. This
+//                  is BEFORE Ares' 0x489235 hook, so it is the genuine stock
+//                  value the host checks bit-exact.
 //   0x489249 (6) - EAX holds the post-verses value entering the cap clamp
 //                  (`mov ecx,[0x8871E0]`, 6 bytes). This is AFTER Ares' verses
 //                  multiply; if Ares returns past here it simply stays absent.
-DEFINE_HOOK(0x489229, MapClass_GetTotalDamage_DamageDumpPreVerses, 0x6)
+DEFINE_HOOK(0x489227, MapClass_GetTotalDamage_DamageDumpPreVerses, 0x6)
 {
 	GET(int, preVerses, ESI);
 	DamageDump::StagePreVerses(preVerses);
