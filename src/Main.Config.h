@@ -36,6 +36,7 @@ public:
 	int SyncDumpMaxFrames;
 	char AstarDumpMode[8];
 	char CellDumpFrames[128];
+	bool DamageDump;
 	bool HarnessProbeEnabled;
 	char HarnessDir[64];
 	int HarnessSeed;
@@ -66,6 +67,7 @@ public:
 		, SyncDumpMaxFrames { 5000 }
 		, AstarDumpMode { "no" }
 		, CellDumpFrames { "" }
+		, DamageDump { false }
 		, HarnessProbeEnabled { false }
 		, HarnessDir { "HARNESS" }
 		, HarnessSeed { 0 }
