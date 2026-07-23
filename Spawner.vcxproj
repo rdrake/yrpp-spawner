@@ -65,6 +65,7 @@
     <ClCompile Include="$(ThisDir)\src\Spawner\Statistics.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\AstarDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\CellDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\DamageDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessManifest.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessOrders.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessProbe.cpp" />
@@ -97,6 +98,7 @@
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\AstarDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\CellDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\DamageDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessManifest.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessOrders.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessProbe.h" />
