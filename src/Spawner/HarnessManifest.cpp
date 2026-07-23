@@ -85,5 +85,17 @@ void HarnessManifest::Write(const char* dir, int sessionId)
 		reinterpret_cast<unsigned int&>(ScenarioClass::Instance->SpecialFlags),
 		*reinterpret_cast<unsigned int*>(0xA8E960));
 
+	// Loaded-image bytes of CellClass::SpreadTiberium's gate block
+	// (0x483780..0x483820). Every static source gate passes in the
+	// 2026-07-21+ era yet the function returns false before the direction
+	// draw; if these bytes diverge from gamemd-spawn.exe on disk, something
+	// patches the gate at load time and the divergence names it. Read-only,
+	// session-open, code pages are always readable - bounded at 0xA0 bytes.
+	std::fprintf(pFile, "spreadtib_bytes=");
+	const unsigned char* pGate = reinterpret_cast<const unsigned char*>(0x483780);
+	for (int i = 0; i < 0xA0; ++i)
+		std::fprintf(pFile, "%02X", pGate[i]);
+	std::fprintf(pFile, "\n");
+
 	std::fclose(pFile);
 }
