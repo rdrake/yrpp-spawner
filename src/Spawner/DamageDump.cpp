@@ -46,20 +46,13 @@ namespace
 	int lastFrame = -1;
 	bool dirCreated = false;
 	bool capLogged = false;
-	bool rawDumped = false;
 	int sinceFlush = 0;
 
-	// f32/f64 as their raw IEEE bit patterns, so the host reconstructs the exact
-	// value the engine held (a decimal round-trip would corrupt the x87 replay).
+	// f32 as its raw IEEE bit pattern, so the host reconstructs the exact value
+	// the engine's falloff held (a decimal round-trip would corrupt the x87 replay).
 	unsigned int F32Bits(float v)
 	{
 		unsigned int u;
-		std::memcpy(&u, &v, sizeof u);
-		return u;
-	}
-	unsigned long long F64Bits(double v)
-	{
-		unsigned long long u;
 		std::memcpy(&u, &v, sizeof u);
 		return u;
 	}
@@ -100,31 +93,43 @@ namespace
 		std::fprintf(pFile, "DAMAGEDUMP=1\n");
 		std::fprintf(pFile, "SEED=%08X\n", fileSeed);
 		std::fprintf(pFile,
-			"COLUMNS=frame,damage,armor,distance,verses,cellspread,percentatmax,cap,mapflag,whnull,output\n");
+			"COLUMNS=frame,damage,armor,distance,cellspread,percentatmax,cap,mapflag,whnull,preverses,scaled,output\n");
 		return true;
 	}
 }
 
 void DamageDump::StageInputs(int frame, int damage, int armor, int distance,
-	double verses, float cellspread, float percentatmax, int cap,
-	bool mapNoDamage, bool warheadNull, const unsigned char* whRaw)
+	float cellspread, float percentatmax, int cap,
+	bool mapNoDamage, bool warheadNull)
 {
 	Pending.frame = frame;
 	Pending.damage = damage;
 	Pending.armor = armor;
 	Pending.distance = distance;
-	Pending.verses = verses;
 	Pending.cellspread = cellspread;
 	Pending.percentatmax = percentatmax;
 	Pending.cap = cap;
 	Pending.mapNoDamage = mapNoDamage;
 	Pending.warheadNull = warheadNull;
-	Pending.whPtr = reinterpret_cast<unsigned int>(whRaw);
-	if (whRaw)
-		std::memcpy(Pending.whRaw, whRaw, sizeof(Pending.whRaw));
-	else
-		std::memset(Pending.whRaw, 0, sizeof(Pending.whRaw));
+	// The positive-path hooks fill these in later; clear them so a heal / early-out
+	// call (which never reaches those sites) emits them as absent.
+	Pending.hasPreVerses = false;
+	Pending.preVerses = 0;
+	Pending.hasScaled = false;
+	Pending.scaled = 0;
 	++EntryCount;
+}
+
+void DamageDump::StagePreVerses(int preVerses)
+{
+	Pending.preVerses = preVerses;
+	Pending.hasPreVerses = true;
+}
+
+void DamageDump::StageScaled(int scaled)
+{
+	Pending.scaled = scaled;
+	Pending.hasScaled = true;
 }
 
 void DamageDump::Emit(int output)
@@ -138,7 +143,6 @@ void DamageDump::Emit(int output)
 		EntryCount = 1; // the StageInputs for THIS call already ran
 		ExitCount = 0;
 		capLogged = false;
-		rawDumped = false;
 		sinceFlush = 0;
 	}
 	lastFrame = Pending.frame;
@@ -161,28 +165,31 @@ void DamageDump::Emit(int output)
 	if (!EnsureFile())
 		return;
 
-	// DIAGNOSTIC: one raw warhead-struct window per file, to locate the true
-	// field offsets. Format: RAW=<pWH hex>:<0x160 bytes, hex, no separators>.
-	if (!rawDumped)
-	{
-		std::fprintf(pFile, "RAW=%08X:", Pending.whPtr);
-		for (unsigned i = 0; i < sizeof(Pending.whRaw); ++i)
-			std::fprintf(pFile, "%02X", Pending.whRaw[i]);
-		std::fprintf(pFile, "\n");
-		rawDumped = true;
-	}
+	// preVerses / scaled are absent on heal & early-out rows (the positive-path
+	// hooks never fired); emit them as "-" so the host reads Option::None.
+	char preBuf[16];
+	char scaledBuf[16];
+	if (Pending.hasPreVerses)
+		std::sprintf(preBuf, "%d", Pending.preVerses);
+	else
+		std::strcpy(preBuf, "-");
+	if (Pending.hasScaled)
+		std::sprintf(scaledBuf, "%d", Pending.scaled);
+	else
+		std::strcpy(scaledBuf, "-");
 
-	std::fprintf(pFile, "D=%d,%d,%d,%d,%016llX,%08X,%08X,%d,%d,%d,%d\n",
+	std::fprintf(pFile, "D=%d,%d,%d,%d,%08X,%08X,%d,%d,%d,%s,%s,%d\n",
 		Pending.frame,
 		Pending.damage,
 		Pending.armor,
 		Pending.distance,
-		F64Bits(Pending.verses),
 		F32Bits(Pending.cellspread),
 		F32Bits(Pending.percentatmax),
 		Pending.cap,
 		Pending.mapNoDamage ? 1 : 0,
 		Pending.warheadNull ? 1 : 0,
+		preBuf,
+		scaledBuf,
 		output);
 
 	if (++sinceFlush >= FlushEvery)
@@ -222,23 +229,20 @@ DEFINE_HOOK(0x489180, MapClass_GetTotalDamage_DamageDumpEntry, 0x6)
 	GET_STACK(int, armor, 0x4);
 	GET_STACK(int, distance, 0x8);
 
-	double verses = 0.0;
+	// CellSpread/PercentAtMax drive the STOCK x87 falloff (0x4891CE/0x4891D8),
+	// which Ares leaves alone, so these are the real values the engine uses. Read
+	// them at the engine's own offsets. We deliberately do NOT read the in-struct
+	// Verses[] at +0xA0: it is dead (all-1.0 ctor default) because Ares does the
+	// verses multiply from its own table -- see StagePreVerses/StageScaled and the
+	// header. Offsets from the 0x489180 disassembly:
+	//   CellSpread   = fld  [edi + 0x124]   (0x4891D8)
+	//   PercentAtMax = fmul [edi + 0x12C]   (0x4891CE)
 	float cellspread = 0.0f;
 	float percentatmax = 0.0f;
 	const bool warheadNull = (pWH == nullptr);
 	if (!warheadNull && armor >= 0 && armor < 0xB)
 	{
-		// Read the fields at the ENGINE's own offsets, exactly as GetTotalDamage
-		// does -- NOT via YRpp's WarheadTypeClass fields. YRpp's layout is off
-		// here: our first capture read Verses=1.0 where the engine's
-		// `fmul [edi+edx*8+0xA0]` used 0.2 (a `double Deform` sits before Verses
-		// in YRpp, so its Verses is not at +0xA0). Offsets from the 0x489180
-		// disassembly:
-		//   Verses[i]    = fmul qword [edi + i*8 + 0xA0]   (0x48923D)
-		//   CellSpread   = fld       [edi + 0x124]         (0x4891D8)
-		//   PercentAtMax = fmul      [edi + 0x12C]         (0x4891CE)
 		const char* whBase = reinterpret_cast<const char*>(pWH);
-		verses       = *reinterpret_cast<const double*>(whBase + 0xA0 + armor * 8);
 		cellspread   = *reinterpret_cast<const float*>(whBase + 0x124);
 		percentatmax = *reinterpret_cast<const float*>(whBase + 0x12C);
 	}
@@ -255,8 +259,32 @@ DEFINE_HOOK(0x489180, MapClass_GetTotalDamage_DamageDumpEntry, 0x6)
 		mapNoDamage = (*pFlag & 0x20) != 0;
 
 	DamageDump::StageInputs(Unsorted::CurrentFrame, damage, armor, distance,
-		verses, cellspread, percentatmax, cap, mapNoDamage, warheadNull,
-		reinterpret_cast<const unsigned char*>(pWH));
+		cellspread, percentatmax, cap, mapNoDamage, warheadNull);
+	return 0;
+}
+
+// POSITIVE-PATH INTERMEDIATES. Both sites are on the positive branch only, so
+// heal / early-out calls never reach them and emit "-".
+//
+//   0x489229 (6) - ESI holds the stock falloff result (post-falloff, PRE the
+//                  0x48922F/0x489233 max(0) clamp and pre-verses). Window is
+//                  `mov edx,[esp+0x18]` (4) + `test esi,esi` (2), ending on the
+//                  0x48922F boundary. This is BEFORE Ares' 0x489235 hook, so it
+//                  is the genuine stock value the host checks bit-exact.
+//   0x489249 (6) - EAX holds the post-verses value entering the cap clamp
+//                  (`mov ecx,[0x8871E0]`, 6 bytes). This is AFTER Ares' verses
+//                  multiply; if Ares returns past here it simply stays absent.
+DEFINE_HOOK(0x489229, MapClass_GetTotalDamage_DamageDumpPreVerses, 0x6)
+{
+	GET(int, preVerses, ESI);
+	DamageDump::StagePreVerses(preVerses);
+	return 0;
+}
+
+DEFINE_HOOK(0x489249, MapClass_GetTotalDamage_DamageDumpScaled, 0x6)
+{
+	GET(int, scaled, EAX);
+	DamageDump::StageScaled(scaled);
 	return 0;
 }
 
