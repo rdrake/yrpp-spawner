@@ -30,6 +30,7 @@
 
 #include <Utilities/Debug.h>
 #include <SessionClass.h>
+#include <ScenarioClass.h>
 #include <Unsorted.h>
 
 #include <Windows.h>
@@ -62,7 +63,16 @@ void HarnessManifest::Write(const char* dir, int sessionId)
 		"celldump_enabled=%d\n"
 		"syncdump_enabled=%d\n"
 		"syncdump_compute_crc=%d\n"
-		"astardump_enabled=%d\n",
+		"astardump_enabled=%d\n"
+		// Ground truth for the tiberium-regrowth oracles: the archived
+		// 2026-07-17/07-20 SYNC games behave as TiberiumSpreads=ON while the
+		// 2026-07-21+ CELLDUMP games are field-proven OFF, and no static
+		// analysis has located the toggle. special_flags is the dword the
+		// engine gates on (CellClass::SpreadTiberium 0x483780 tests
+		// ScenarioClass.SpecialFlags & 0x80); special_global is the Special
+		// INI-read copy at 0xA8E960 for comparison.
+		"special_flags=%08X\n"
+		"special_global=%08X\n",
 		ProtocolVersion,
 		sessionId,
 		static_cast<int>(SessionClass::Instance.GameMode),
@@ -71,7 +81,9 @@ void HarnessManifest::Write(const char* dir, int sessionId)
 		CellDump::Enable ? 1 : 0,
 		SyncDump::Enable ? 1 : 0,
 		SyncDump::ComputeCRC ? 1 : 0,
-		AstarDump::Enable ? 1 : 0);
+		AstarDump::Enable ? 1 : 0,
+		reinterpret_cast<unsigned int&>(ScenarioClass::Instance->SpecialFlags),
+		*reinterpret_cast<unsigned int*>(0xA8E960));
 
 	std::fclose(pFile);
 }
