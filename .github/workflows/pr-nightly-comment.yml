@@ -3,6 +3,12 @@ on:
   workflow_run:
     workflows: ['Nightly Build']
     types: [completed]
+# The fork's default GITHUB_TOKEN is read-only, so grant this workflow the
+# scopes it actually uses: issue/PR comment upsert + artifact listing.
+permissions:
+  issues: write
+  pull-requests: write
+  actions: read
 jobs:
   pr_comment:
     if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
