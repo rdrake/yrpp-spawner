@@ -64,13 +64,17 @@ public:
 		int cap;
 		bool mapNoDamage;
 		bool warheadNull;
+		// DIAGNOSTIC: raw warhead-struct window + pointer, to locate the true
+		// Verses/CellSpread/PercentAtMax offsets from a live capture.
+		unsigned int whPtr;
+		unsigned char whRaw[0x160];
 	};
 	static PendingRec Pending;
 
 	// Called by the entry hook with the function's inputs.
 	static void StageInputs(int frame, int damage, int armor, int distance,
 		double verses, float cellspread, float percentatmax, int cap,
-		bool mapNoDamage, bool warheadNull);
+		bool mapNoDamage, bool warheadNull, const unsigned char* whRaw);
 
 	// Called by an exit hook with the function's return value; emits one row.
 	static void Emit(int output);

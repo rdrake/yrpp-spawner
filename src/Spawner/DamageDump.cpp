@@ -46,6 +46,7 @@ namespace
 	int lastFrame = -1;
 	bool dirCreated = false;
 	bool capLogged = false;
+	bool rawDumped = false;
 	int sinceFlush = 0;
 
 	// f32/f64 as their raw IEEE bit patterns, so the host reconstructs the exact
@@ -106,7 +107,7 @@ namespace
 
 void DamageDump::StageInputs(int frame, int damage, int armor, int distance,
 	double verses, float cellspread, float percentatmax, int cap,
-	bool mapNoDamage, bool warheadNull)
+	bool mapNoDamage, bool warheadNull, const unsigned char* whRaw)
 {
 	Pending.frame = frame;
 	Pending.damage = damage;
@@ -118,6 +119,11 @@ void DamageDump::StageInputs(int frame, int damage, int armor, int distance,
 	Pending.cap = cap;
 	Pending.mapNoDamage = mapNoDamage;
 	Pending.warheadNull = warheadNull;
+	Pending.whPtr = reinterpret_cast<unsigned int>(whRaw);
+	if (whRaw)
+		std::memcpy(Pending.whRaw, whRaw, sizeof(Pending.whRaw));
+	else
+		std::memset(Pending.whRaw, 0, sizeof(Pending.whRaw));
 	++EntryCount;
 }
 
@@ -132,6 +138,7 @@ void DamageDump::Emit(int output)
 		EntryCount = 1; // the StageInputs for THIS call already ran
 		ExitCount = 0;
 		capLogged = false;
+		rawDumped = false;
 		sinceFlush = 0;
 	}
 	lastFrame = Pending.frame;
@@ -153,6 +160,17 @@ void DamageDump::Emit(int output)
 
 	if (!EnsureFile())
 		return;
+
+	// DIAGNOSTIC: one raw warhead-struct window per file, to locate the true
+	// field offsets. Format: RAW=<pWH hex>:<0x160 bytes, hex, no separators>.
+	if (!rawDumped)
+	{
+		std::fprintf(pFile, "RAW=%08X:", Pending.whPtr);
+		for (unsigned i = 0; i < sizeof(Pending.whRaw); ++i)
+			std::fprintf(pFile, "%02X", Pending.whRaw[i]);
+		std::fprintf(pFile, "\n");
+		rawDumped = true;
+	}
 
 	std::fprintf(pFile, "D=%d,%d,%d,%d,%016llX,%08X,%08X,%d,%d,%d,%d\n",
 		Pending.frame,
@@ -237,7 +255,8 @@ DEFINE_HOOK(0x489180, MapClass_GetTotalDamage_DamageDumpEntry, 0x6)
 		mapNoDamage = (*pFlag & 0x20) != 0;
 
 	DamageDump::StageInputs(Unsorted::CurrentFrame, damage, armor, distance,
-		verses, cellspread, percentatmax, cap, mapNoDamage, warheadNull);
+		verses, cellspread, percentatmax, cap, mapNoDamage, warheadNull,
+		reinterpret_cast<const unsigned char*>(pWH));
 	return 0;
 }
 
