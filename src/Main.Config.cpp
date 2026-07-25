@@ -22,6 +22,7 @@
 #include <Spawner/CellDump.h>
 #include <Spawner/DamageDump.h>
 #include <Spawner/HarnessProbe.h>
+#include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
 #include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
@@ -57,6 +58,8 @@ void MainConfig::LoadFromINIFile()
 		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
 		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
 		this->DamageDump           = pINI->ReadBool(pOptionsSection, "DAMAGEDUMP", this->DamageDump);
+		this->RngDump              = pINI->ReadBool(pOptionsSection, "RNGDUMP", this->RngDump);
+		this->RngDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "RNGDUMP.MaxFrames", this->RngDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
 		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
@@ -208,6 +211,16 @@ void MainConfig::ApplyStaticOptions()
 	DamageDump::Enable = this->DamageDump;
 	if (DamageDump::Enable)
 		Debug::Log("[DamageDump] Armed\n");
+
+	// RNGDUMP=yes - record the caller EIP of every Randomizer draw, making draw
+	// ATTRIBUTION exact instead of inferred (Spawner/RngDump.cpp).
+	// RNGDUMP.MaxFrames=<n> stops appending past frame n; 0 (the default) means
+	// unlimited and lets RngDump::MaxRows be the only bound.
+	RngDump::Enable = this->RngDump;
+	RngDump::MaxFrames = this->RngDumpMaxFrames;
+	if (RngDump::Enable)
+		Debug::Log("[RngDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			RngDump::MaxFrames, RngDump::MaxRows);
 
 	if (this->SingleProcAffinity)
 	{
