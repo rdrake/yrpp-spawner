@@ -554,6 +554,60 @@ namespace
 							HarnessOrders::ResultReason(result), requestedFrame, frame);
 					}
 				}
+				else if (std::strcmp(buf, "spawn") == 0)
+				{
+					// The second state-mutating verb, gated identically to
+					// move (single-player only - HarnessOrders.h). Every
+					// non-Ok outcome is a terminal `rejected`, matching
+					// move's convention: "the harness declined to act, and
+					// here is exactly why", never a crash and never a
+					// silent no-op that leaks the allocated object.
+					char typeBuf[64];
+					char argBuf[64];
+					int cellX = -1;
+					int cellY = -1;
+					bool argsOk = true;
+
+					if (!ReadKey(body, "type", typeBuf, sizeof(typeBuf)))
+						argsOk = false;
+
+					if (ReadKey(body, "x", argBuf, sizeof(argBuf)))
+						cellX = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "y", argBuf, sizeof(argBuf)))
+						cellY = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-spawn-args",
+							requestedFrame, frame);
+					}
+					else
+					{
+						unsigned int uid = 0;
+						const SpawnResult result = HarnessOrders::Spawn(typeBuf, cellX, cellY, &uid);
+						if (result == SpawnResult::Ok)
+						{
+							// The label-to-UID binding: the harness's own
+							// AbstractClass::UniqueID, never an array index
+							// (HarnessOrders.h) - embedded here so the host
+							// can bind whatever label it staged this command
+							// under to the real, stable identity.
+							char reason[64];
+							std::snprintf(reason, sizeof(reason), "spawned-uid=%u", uid);
+							acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+						}
+						else
+						{
+							acked = WriteAck(id, "rejected",
+								HarnessOrders::ResultReason(result), requestedFrame, frame);
+						}
+					}
+				}
 				else if (std::strcmp(buf, "fail-test") == 0)
 				{
 					// Exercises the fourth ack state so the controller's
