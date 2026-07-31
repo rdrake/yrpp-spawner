@@ -24,6 +24,12 @@
 
 #include <AnimClass.h>
 #include <AnimTypeClass.h>
+// AnimClass.h reaches Helpers/Cast.h (via ObjectClass.h -> Helpers/Template.h),
+// whose abstract_cast specializations need a COMPLETE TechnoClass/FootClass by
+// the end of the TU. FootClass.h completes both - the same reason
+// HarnessSnapshot.cpp and HarnessProbe.cpp include it. Nothing here casts or
+// calls anything techno-side; this include exists only to satisfy Cast.h.
+#include <FootClass.h>
 #include <Unsorted.h>
 
 #include <Windows.h>
