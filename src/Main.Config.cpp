@@ -18,6 +18,7 @@
 */
 
 #include "Main.Config.h"
+#include <Spawner/AnimDump.h>
 #include <Spawner/AstarDump.h>
 #include <Spawner/CellDump.h>
 #include <Spawner/DamageDump.h>
@@ -60,6 +61,8 @@ void MainConfig::LoadFromINIFile()
 		this->DamageDump           = pINI->ReadBool(pOptionsSection, "DAMAGEDUMP", this->DamageDump);
 		this->RngDump              = pINI->ReadBool(pOptionsSection, "RNGDUMP", this->RngDump);
 		this->RngDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "RNGDUMP.MaxFrames", this->RngDumpMaxFrames);
+		this->AnimDump             = pINI->ReadBool(pOptionsSection, "ANIMDUMP", this->AnimDump);
+		this->AnimDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "ANIMDUMP.MaxFrames", this->AnimDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
 		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
@@ -221,6 +224,17 @@ void MainConfig::ApplyStaticOptions()
 	if (RngDump::Enable)
 		Debug::Log("[RngDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
 			RngDump::MaxFrames, RngDump::MaxRows);
+
+	// ANIMDUMP=yes - per-frame per-anim raw state (owner pointer, raw Location,
+	// limbo flag, stable instance identity), the observables the flame-detach
+	// question pre-registered and SYNCDUMP cannot record (Spawner/AnimDump.cpp).
+	// ANIMDUMP.MaxFrames=<n> stops appending past frame n; 0 (the default)
+	// means unlimited and lets AnimDump::MaxRows be the only bound.
+	AnimDump::Enable = this->AnimDump;
+	AnimDump::MaxFrames = this->AnimDumpMaxFrames;
+	if (AnimDump::Enable)
+		Debug::Log("[AnimDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			AnimDump::MaxFrames, AnimDump::MaxRows);
 
 	if (this->SingleProcAffinity)
 	{
