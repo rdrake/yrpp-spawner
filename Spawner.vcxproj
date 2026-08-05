@@ -64,6 +64,7 @@
     <ClCompile Include="$(ThisDir)\src\Spawner\Spawner.Hook.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\Statistics.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\AnimDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\MissionDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\AstarDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\CellDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\DamageDump.cpp" />
@@ -99,6 +100,7 @@
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.Config.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\AnimDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\MissionDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\AstarDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\CellDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\DamageDump.h" />

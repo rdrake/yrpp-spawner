@@ -41,6 +41,8 @@ public:
 	int RngDumpMaxFrames;
 	bool AnimDump;
 	int AnimDumpMaxFrames;
+	bool MissionDump;
+	int MissionDumpMaxFrames;
 	bool HarnessProbeEnabled;
 	char HarnessDir[64];
 	int HarnessSeed;
@@ -76,6 +78,8 @@ public:
 		, RngDumpMaxFrames { 0 }
 		, AnimDump { false }
 		, AnimDumpMaxFrames { 0 }
+		, MissionDump { false }
+		, MissionDumpMaxFrames { 0 }
 		, HarnessProbeEnabled { false }
 		, HarnessDir { "HARNESS" }
 		, HarnessSeed { 0 }

@@ -23,6 +23,7 @@
 #include <Spawner/CellDump.h>
 #include <Spawner/DamageDump.h>
 #include <Spawner/HarnessProbe.h>
+#include <Spawner/MissionDump.h>
 #include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
 #include <Utilities/Debug.h>
@@ -63,6 +64,8 @@ void MainConfig::LoadFromINIFile()
 		this->RngDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "RNGDUMP.MaxFrames", this->RngDumpMaxFrames);
 		this->AnimDump             = pINI->ReadBool(pOptionsSection, "ANIMDUMP", this->AnimDump);
 		this->AnimDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "ANIMDUMP.MaxFrames", this->AnimDumpMaxFrames);
+		this->MissionDump          = pINI->ReadBool(pOptionsSection, "MISSIONDUMP", this->MissionDump);
+		this->MissionDumpMaxFrames = pINI->ReadInteger(pOptionsSection, "MISSIONDUMP.MaxFrames", this->MissionDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
 		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
@@ -235,6 +238,19 @@ void MainConfig::ApplyStaticOptions()
 	if (AnimDump::Enable)
 		Debug::Log("[AnimDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
 			AnimDump::MaxFrames, AnimDump::MaxRows);
+
+	// MISSIONDUMP=yes - per-frame per-object mission state, including the two
+	// fields the Ares SYNCDUMP row does NOT print: the mission timer's raw
+	// remaining count (+0xD0) and MissionStatus (+0xBC). See
+	// Spawner/MissionDump.h for why this is a separate dump and not two more
+	// columns on the Ares row. MISSIONDUMP.MaxFrames=<n> stops appending past
+	// frame n; 0 (the default) means unlimited and lets MissionDump::MaxRows
+	// be the only bound.
+	MissionDump::Enable = this->MissionDump;
+	MissionDump::MaxFrames = this->MissionDumpMaxFrames;
+	if (MissionDump::Enable)
+		Debug::Log("[MissionDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			MissionDump::MaxFrames, MissionDump::MaxRows);
 
 	if (this->SingleProcAffinity)
 	{
