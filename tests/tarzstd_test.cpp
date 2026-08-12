@@ -67,62 +67,63 @@ int main()
 		check(w.Close(), "Close");
 	}
 
-	// 1. Real tar must list exactly the members, with exactly the sizes.
+	// 1. Real tar must list exactly the members.
+	//
+	//    Names only, via -tf. An earlier version read sizes out of -tvf BY
+	//    FIELD POSITION, which is not portable: BSD tar prints owner and group
+	//    as two fields where GNU tar prints one "owner/group", so the size sits
+	//    in a different column and the check would have compared the wrong
+	//    token. Sizes are covered far better by the byte-identity pass below.
 	{
-		FILE* p = popen("tar --use-compress-program=unzstd -tvf /tmp/tarzstd_out.tar.zst 2>&1", "r");
+		FILE* p = popen("tar --use-compress-program=unzstd -tf /tmp/tarzstd_out.tar.zst 2>&1", "r");
 		int listed = 0;
-		bool sizesOk = true;
 		char line[512];
 		while (p && std::fgets(line, sizeof(line), p))
-		{
 			if (std::strstr(line, "SYNCDUMP/F"))
-			{
-				// BSD tar: -rw-r--r--  0 root root <size> <date> <name>
-				unsigned long long size = 0;
-				const char* n = std::strstr(line, "SYNCDUMP/F");
-				if (std::sscanf(line, "%*s %*s %*s %*s %llu", &size) == 1)
-				{
-					std::string nm(n);
-					while (!nm.empty() && (nm.back() == '\n' || nm.back() == '\r'))
-						nm.pop_back();
-					for (size_t i = 0; i < names.size(); ++i)
-						if (names[i] == nm && contents[i].size() != size)
-							sizesOk = false;
-				}
 				++listed;
-			}
-		}
 		if (p) pclose(p);
 		std::printf("     tar listed %d members\n", listed);
 		check(listed == kFrames, "tar lists every member");
-		check(sizesOk, "tar reports the exact byte size of every member");
 	}
 
-	// 2. Extracted bytes must be identical -- the check that catches a wrong
-	//    header size, a missing pad, or a mangled compressed payload.
+	// 2. EVERY member's extracted bytes must be identical -- the check that
+	//    catches a wrong header size, a missing pad, or a mangled payload.
+	//    One extraction, then compare on disk: doing it per member through
+	//    popen was slow enough that it only ever ran on a handful, which is
+	//    how a fragile size check came to carry the rest of the weight.
 	{
-		bool allMatch = true;
-		for (int i : {0, 1, 63, 64, 65, kFrames - 1})
+		if (std::system("rm -rf /tmp/tarzstd_x && mkdir -p /tmp/tarzstd_x && "
+			"tar --use-compress-program=unzstd -xf /tmp/tarzstd_out.tar.zst "
+			"-C /tmp/tarzstd_x 2>/dev/null") != 0)
 		{
-			char cmd[256];
-			std::snprintf(cmd, sizeof(cmd),
-				"tar --use-compress-program=unzstd -xOf /tmp/tarzstd_out.tar.zst '%s' 2>/dev/null",
-				names[i].c_str());
-			FILE* p = popen(cmd, "r");
-			std::string got;
-			char buf[65536];
-			size_t n;
-			while (p && (n = std::fread(buf, 1, sizeof(buf), p)) > 0)
-				got.append(buf, n);
-			if (p) pclose(p);
-			if (got != contents[i])
-			{
-				std::printf("     member %d differs: got %zu bytes, want %zu\n",
-					i, got.size(), contents[i].size());
-				allMatch = false;
-			}
+			check(false, "extract the archive for comparison");
 		}
-		check(allMatch, "extracted bytes are byte-identical (incl. across frame boundaries 63/64/65)");
+		else
+		{
+			int matched = 0, differed = 0;
+			for (size_t i = 0; i < names.size(); ++i)
+			{
+				const std::string path = "/tmp/tarzstd_x/" + names[i];
+				std::string got;
+				if (FILE* f = std::fopen(path.c_str(), "rb"))
+				{
+					char buf[65536];
+					size_t n;
+					while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+						got.append(buf, n);
+					std::fclose(f);
+				}
+				if (got == contents[i])
+					++matched;
+				else if (++differed <= 3)
+					std::printf("     %s differs: got %zu bytes, want %zu\n",
+						names[i].c_str(), got.size(), contents[i].size());
+			}
+			std::printf("     %d of %zu members byte-identical\n", matched, names.size());
+			check(matched == static_cast<int>(names.size()) && differed == 0,
+				"every member survives the round trip byte-for-byte");
+		}
+		std::system("rm -rf /tmp/tarzstd_x");
 	}
 
 	// 3. The whole point: the archive must be far smaller than the input.

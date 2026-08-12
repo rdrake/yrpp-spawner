@@ -25,7 +25,12 @@
 // precisely so a host can pin the convention, and the SAME definition is set on
 // zstd.c in Spawner.vcxproj. If the two ever disagree the decorated names
 // differ and the LINKER says so -- this cannot fail quietly.
-#ifndef ZSTDLIB_VISIBLE
+// MSVC only, and the guard is load-bearing rather than defensive: `__cdecl` is
+// not a keyword for GCC, so defining this unconditionally makes every zstd
+// declaration fail to parse on the host that runs the tests. Apple clang
+// tolerates the token, which is exactly why this passed locally and had to be
+// caught by CI.
+#if defined(_MSC_VER) && !defined(ZSTDLIB_VISIBLE)
 #define ZSTDLIB_VISIBLE __cdecl
 #endif
 
