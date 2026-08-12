@@ -22,6 +22,24 @@
 #include <cstddef>
 #include <cstdio>
 
+// This project builds /Gz (StdCall) but zstd is C compiled __cdecl, so
+// TarZstd.cpp is compiled Cdecl (see Spawner.vcxproj) to make zstd.h's
+// undecorated declarations match zstd.c's definitions. That leaves this class
+// straddling two conventions: its methods are defined in a Cdecl TU and called
+// from SyncDump.cpp, which is StdCall. Pinning them explicitly is what makes
+// both TUs agree, and a mismatch changes the decorated names so the LINKER
+// catches it.
+//
+// The convention goes AFTER the return type. MSVC rejects it before
+// (C2062 "type 'unsigned int' unexpected", C4230 "modifiers/qualifiers
+// interspersed") -- clang targeting MSVC accepts the leading position, so it
+// is not a usable stand-in for this question.
+#if defined(_MSC_VER)
+#define TARZSTD_CALL __cdecl
+#else
+#define TARZSTD_CALL
+#endif
+
 // A streaming `.tar.zst` writer: POSIX ustar members fed through a zstd
 // compression stream, so a capture's per-frame text never persists uncompressed.
 //
@@ -99,7 +117,13 @@ public:
 	static constexpr int DefaultLevel = 6;
 
 	TarZstdWriter() = default;
-	~TarZstdWriter();
+
+	// Defined inline on purpose: a global TarZstdWriter in SyncDump.cpp gets
+	// its destructor call emitted in THAT translation unit, and an out-of-line
+	// destructor is the one member whose calling convention cannot be pinned
+	// with TARZSTD_CALL. Inlining removes the cross-TU symbol entirely; the
+	// work happens in Close(), which is pinned.
+	~TarZstdWriter() { Close(); }
 
 	TarZstdWriter(const TarZstdWriter&) = delete;
 	TarZstdWriter& operator=(const TarZstdWriter&) = delete;
@@ -108,23 +132,23 @@ public:
 	// complete zstd frame every `framePeriod` members (<= 0 means never, which
 	// maximises ratio and loses everything if the process is killed). Returns
 	// false and sets LastError() on failure; the object stays closed.
-	bool Open(const char* path, int level = DefaultLevel,
+	bool TARZSTD_CALL Open(const char* path, int level = DefaultLevel,
 		int framePeriod = DefaultFramePeriod, int windowLog = DefaultWindowLog);
 
 	// Appends one member. `name` is the archive path (forward slashes).
 	// Returns false and sets LastError() on any write or compression failure,
 	// after which the writer closes itself rather than emit a corrupt stream.
-	bool AppendBytes(const char* name, const void* data, size_t size);
+	bool TARZSTD_CALL AppendBytes(const char* name, const void* data, size_t size);
 
 	// Reads `sourcePath` whole and appends it as `name`. Returns false if the
 	// source cannot be read, WITHOUT closing the writer -- a single unreadable
 	// input is not a reason to abandon the archive.
-	bool AppendFile(const char* name, const char* sourcePath);
+	bool TARZSTD_CALL AppendFile(const char* name, const char* sourcePath);
 
 	// Writes the end-of-archive trailer, ends the zstd frame and closes the
 	// file. Safe to call on an already-closed writer. Returns false if the
 	// trailer could not be written.
-	bool Close();
+	bool TARZSTD_CALL Close();
 
 	bool IsOpen() const { return File != nullptr; }
 	const char* LastError() const { return Error; }

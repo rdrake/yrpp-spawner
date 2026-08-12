@@ -19,21 +19,14 @@
 
 #include "TarZstd.h"
 
-// This project builds with /Gz (StdCall) project-wide, but zstd is C compiled
-// __cdecl. Without this the declarations here would be stdcall while the
-// definitions in zstd.c are cdecl. zstd.h guards ZSTDLIB_VISIBLE with #ifndef
-// precisely so a host can pin the convention, and the SAME definition is set on
-// zstd.c in Spawner.vcxproj. If the two ever disagree the decorated names
-// differ and the LINKER says so -- this cannot fail quietly.
-// MSVC only, and the guard is load-bearing rather than defensive: `__cdecl` is
-// not a keyword for GCC, so defining this unconditionally makes every zstd
-// declaration fail to parse on the host that runs the tests. Apple clang
-// tolerates the token, which is exactly why this passed locally and had to be
-// caught by CI.
-#if defined(_MSC_VER) && !defined(ZSTDLIB_VISIBLE)
-#define ZSTDLIB_VISIBLE __cdecl
-#endif
-
+// This translation unit is compiled Cdecl (Spawner.vcxproj) while the project
+// default is /Gz (StdCall), so the undecorated declarations below match the
+// definitions in zstd.c, which is compiled Cdecl for the same reason. Nothing
+// pins the convention through a macro here: an earlier revision defined
+// ZSTDLIB_VISIBLE=__cdecl and MSVC rejected it outright, because that puts the
+// convention BEFORE the return type. The class's own cross-TU surface is
+// pinned in the header with TARZSTD_CALL instead, where the position is legal.
+//
 // Relative, not <zstd.h>: this needs no AdditionalIncludeDirectories entry,
 // and the project currently sets none.
 #include "ThirdParty/zstd/zstd.h"
@@ -91,11 +84,6 @@ namespace
 	}
 }
 
-TarZstdWriter::~TarZstdWriter()
-{
-	Close();
-}
-
 void TarZstdWriter::Fail(const char* message)
 {
 	Error = message;
@@ -117,7 +105,7 @@ void TarZstdWriter::Fail(const char* message)
 	OutCapacity = 0;
 }
 
-bool TarZstdWriter::Open(const char* path, int level, int framePeriod, int windowLog)
+bool TARZSTD_CALL TarZstdWriter::Open(const char* path, int level, int framePeriod, int windowLog)
 {
 	Close();
 	Error = "";
@@ -263,7 +251,7 @@ bool TarZstdWriter::EndFrame()
 	return true;
 }
 
-bool TarZstdWriter::AppendBytes(const char* name, const void* data, size_t size)
+bool TARZSTD_CALL TarZstdWriter::AppendBytes(const char* name, const void* data, size_t size)
 {
 	if (!File || !Stream)
 	{
@@ -325,7 +313,7 @@ bool TarZstdWriter::AppendBytes(const char* name, const void* data, size_t size)
 	return true;
 }
 
-bool TarZstdWriter::AppendFile(const char* name, const char* sourcePath)
+bool TARZSTD_CALL TarZstdWriter::AppendFile(const char* name, const char* sourcePath)
 {
 	if (!File || !Stream)
 	{
@@ -386,7 +374,7 @@ bool TarZstdWriter::AppendFile(const char* name, const char* sourcePath)
 	return ok;
 }
 
-bool TarZstdWriter::Close()
+bool TARZSTD_CALL TarZstdWriter::Close()
 {
 	if (!File || !Stream)
 	{
