@@ -33,7 +33,7 @@ bool SyncDump::Enable = false;
 bool SyncDump::ComputeCRC = true;
 int SyncDump::MaxFrames = 5000;
 bool SyncDump::Archive = true;
-int SyncDump::ArchiveLevel = 3;
+int SyncDump::ArchiveLevel = TarZstdWriter::DefaultLevel;
 
 namespace
 {

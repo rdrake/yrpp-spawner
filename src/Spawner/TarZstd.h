@@ -38,6 +38,25 @@
 // still reads back cleanly up to the last completed frame. Losing the tail of a
 // capture is an inconvenience; losing all of it is a lost play session.
 //
+// Why there is no explicit row/value deduplication here, measured rather than
+// assumed, because the corpus looks like it is begging for one. Over 1,000
+// contiguous 08-08 frames (1.07 GB): only 2.66% of lines are distinct, and just
+// 7.67% of a frame's lines differ from the previous frame's. But zstd's match
+// finder IS deduplication, and it already collects nearly all of that:
+//
+//     this writer, level 6                6.5 MB
+//     every DISTINCT line, stored once
+//       and compressed  (payload floor)   2.5 MB
+//     zstd level 19 alone                 3.5 MB
+//
+// The 2.5 MB floor is payload only -- a real dedup format must also store, per
+// frame, an ordered index of which 13,588 lines that frame contains. Adding
+// that lands it about where simply raising the level already is, in exchange
+// for a bespoke container: no `tar --zstd`, no byte-identity with what Ares
+// wrote, and a decoder to maintain on the analysis side. The constraint that
+// started this was 14 GB against 13 GB free; at ~79 MB per capture it is gone,
+// and 79 -> 50 buys nothing. Revisit only if a capture's SHAPE changes.
+//
 // Deliberately free of Windows API and of the game's types: this compiles and
 // is tested on the analysis machine, leaving only the file-system glue in
 // SyncDump.cpp platform-specific.
@@ -65,6 +84,20 @@ public:
 	// level. Measured defaults are in the .cpp beside the numbers.
 	static constexpr int DefaultWindowLog = 24;
 
+	// Compression level. Measured over 1,000 contiguous 08-08 frames (1.07 GB),
+	// at the window above:
+	//
+	//     level  3 -> 156.8x  0.91 ms/frame   (~96 MB per full capture)
+	//     level  6 -> 191.3x  1.59 ms/frame   (~79 MB)   <- default
+	//     level  9 -> 201.6x  2.11 ms/frame   (~75 MB)
+	//     level 12 -> 200.4x  2.50 ms/frame   (~75 MB)
+	//
+	// The knee is at 6; level 12 is both slower AND slightly worse than 9, so
+	// there is nothing above this worth paying for. The cost is wall-clock
+	// only -- the simulation is a lockstep logic loop, so how long a frame
+	// takes to compress cannot change what the frame computes.
+	static constexpr int DefaultLevel = 6;
+
 	TarZstdWriter() = default;
 	~TarZstdWriter();
 
@@ -75,8 +108,8 @@ public:
 	// complete zstd frame every `framePeriod` members (<= 0 means never, which
 	// maximises ratio and loses everything if the process is killed). Returns
 	// false and sets LastError() on failure; the object stays closed.
-	bool Open(const char* path, int level = 3, int framePeriod = DefaultFramePeriod,
-		int windowLog = DefaultWindowLog);
+	bool Open(const char* path, int level = DefaultLevel,
+		int framePeriod = DefaultFramePeriod, int windowLog = DefaultWindowLog);
 
 	// Appends one member. `name` is the archive path (forward slashes).
 	// Returns false and sets LastError() on any write or compression failure,
