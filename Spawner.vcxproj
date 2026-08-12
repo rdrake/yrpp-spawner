@@ -78,7 +78,7 @@
       Cdecl, not the project's /Gz default: this TU includes zstd.h, and its
       undecorated declarations must match zstd.c's definitions below. The
       class's own methods are called from SyncDump.cpp, which is StdCall, so
-      they are pinned with TARZSTD_CALL in TarZstd.h -- a mismatch there
+      they are pinned with TARZSTD_CALL in TarZstd.h, and a mismatch there
       changes the decorated names and the linker catches it.
     -->
     <ClCompile Include="$(ThisDir)\src\Spawner\TarZstd.cpp">
