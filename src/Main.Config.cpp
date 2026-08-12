@@ -57,6 +57,8 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDump             = pINI->ReadBool(pOptionsSection, "SYNCDUMP", this->SyncDump);
 		this->SyncDumpComputeCRC   = pINI->ReadBool(pOptionsSection, "SYNCDUMP.ComputeCRC", this->SyncDumpComputeCRC);
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
+		this->SyncDumpArchive      = pINI->ReadBool(pOptionsSection, "SYNCDUMP.Archive", this->SyncDumpArchive);
+		this->SyncDumpArchiveLevel = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.ArchiveLevel", this->SyncDumpArchiveLevel);
 		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
 		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
 		this->DamageDump           = pINI->ReadBool(pOptionsSection, "DAMAGEDUMP", this->DamageDump);
@@ -108,6 +110,8 @@ void MainConfig::ApplyStaticOptions()
 		SyncDump::Enable = true;
 		SyncDump::ComputeCRC = this->SyncDumpComputeCRC;
 		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
+		SyncDump::Archive = this->SyncDumpArchive;
+		SyncDump::ArchiveLevel = this->SyncDumpArchiveLevel;
 	}
 
 	if (_stricmp(this->AstarDumpMode, "yes") == 0)

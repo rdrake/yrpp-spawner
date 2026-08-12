@@ -34,6 +34,8 @@ public:
 	bool SyncDump;
 	bool SyncDumpComputeCRC;
 	int SyncDumpMaxFrames;
+	bool SyncDumpArchive;
+	int SyncDumpArchiveLevel;
 	char AstarDumpMode[8];
 	char CellDumpFrames[128];
 	bool DamageDump;
@@ -71,6 +73,13 @@ public:
 		, SyncDump { false }
 		, SyncDumpComputeCRC { true }
 		, SyncDumpMaxFrames { 5000 }
+		// Archiving defaults ON: a full-length trace is ~14 GB of plain files
+		// against ~120 MB archived, and that gap has already cost a
+		// measurement (a 3.97% sample where the whole corpus was wanted).
+		// Level 3 is zstd's default -- ~95x on this text, and cheap enough to
+		// run inside the frame loop.
+		, SyncDumpArchive { true }
+		, SyncDumpArchiveLevel { 3 }
 		, AstarDumpMode { "no" }
 		, CellDumpFrames { "" }
 		, DamageDump { false }

@@ -18,6 +18,7 @@
 */
 
 #include "SyncDump.h"
+#include "TarZstd.h"
 
 #include <Helpers/Macro.h>
 #include <Utilities/Debug.h>
@@ -31,6 +32,8 @@
 bool SyncDump::Enable = false;
 bool SyncDump::ComputeCRC = true;
 int SyncDump::MaxFrames = 5000;
+bool SyncDump::Archive = true;
+int SyncDump::ArchiveLevel = 3;
 
 namespace
 {
@@ -42,11 +45,19 @@ namespace
 	constexpr uintptr_t FrameLogStride = 0x33Cu;
 	constexpr int FrameLogSlots = 256;
 	constexpr char DumpDir[] = "SYNCDUMP";
+	constexpr char ArchiveName[] = "SYNCDUMP\\TRACE.tar.zst";
 
 	int lastDumpedFrame = 0;
 	int lastComputedFrame = 0;
 	int dumpedCount = 0;
 	bool sessionInitialized = false;
+
+	// Finalised by SyncDump::Finish() on the paths that actually end a capture
+	// (MaxFrames reached, or a new game in the same process). A process killed
+	// outright never gets there, which is exactly what TarZstdWriter's periodic
+	// zstd frames exist for: the archive stays readable up to the last one, so
+	// nothing here depends on the destructor running at DLL unload.
+	TarZstdWriter archive;
 
 	int SlotLoggedFrame(int slot)
 	{
@@ -67,6 +78,32 @@ namespace
 
 		do
 		{
+			// Forward slashes: this is an archive member path, not a Win32 one.
+			// The stale sweep in InitSessionOnce runs before the archive is
+			// opened, so leftovers from an earlier session take the move path
+			// below without needing to be special-cased here.
+			if (archive.IsOpen())
+			{
+				char member[MAX_PATH];
+				sprintf(member, "%s/%s%07d_%s", DumpDir, prefix, frame, fd.cFileName);
+
+				if (archive.AppendFile(member, fd.cFileName))
+				{
+					// The whole point: the uncompressed ~1 MB never persists.
+					// `continue` in a do/while jumps to the CONDITION, i.e. to
+					// FindNextFileA -- the same advance the move path takes.
+					DeleteFileA(fd.cFileName);
+					continue;
+				}
+
+				// Losing frames is worse than losing the space saving, so one
+				// failure demotes the rest of the session to plain files
+				// rather than retrying into a stream of unknown state.
+				Debug::Log("[SyncDump] Archive append failed at frame %d (%s);"
+					" falling back to plain files\n", frame, archive.LastError());
+				archive.Close();
+			}
+
 			char dst[MAX_PATH];
 			sprintf(dst, "%s\\%s%07d_%s", DumpDir, prefix, frame, fd.cFileName);
 			MoveFileExA(fd.cFileName, dst, MOVEFILE_REPLACE_EXISTING);
@@ -84,8 +121,23 @@ namespace
 
 		CreateDirectoryA(DumpDir, nullptr);
 		// Leftover SYNC files from an earlier session or a real desync dump
-		// must not get mixed into this trace.
+		// must not get mixed into this trace. Deliberately before the archive
+		// opens, so they land as plain files and never enter it.
 		CollectSyncFiles("stale", 0);
+
+		if (SyncDump::Archive)
+		{
+			if (archive.Open(ArchiveName, SyncDump::ArchiveLevel))
+			{
+				Debug::Log("[SyncDump] Archiving to %s (level %d)\n",
+					ArchiveName, SyncDump::ArchiveLevel);
+			}
+			else
+			{
+				Debug::Log("[SyncDump] Could not open %s (%s); writing plain files\n",
+					ArchiveName, archive.LastError());
+			}
+		}
 
 		char meta[MAX_PATH];
 		sprintf(meta, "%s\\META.TXT", DumpDir);
@@ -112,7 +164,11 @@ void SyncDump::PerFrame()
 
 	if (currentFrame < lastDumpedFrame)
 	{
-		// A new game started within the same process.
+		// A new game started within the same process. Finalise the previous
+		// game's archive before InitSessionOnce reopens it, or its trailer is
+		// never written and the last frames sit in an unflushed zstd frame.
+		SyncDump::Finish();
+
 		lastDumpedFrame = 0;
 		lastComputedFrame = 0;
 		dumpedCount = 0;
@@ -120,7 +176,10 @@ void SyncDump::PerFrame()
 	}
 
 	if (MaxFrames > 0 && dumpedCount >= MaxFrames)
+	{
+		SyncDump::Finish();
 		return;
+	}
 
 	InitSessionOnce();
 
@@ -138,6 +197,7 @@ void SyncDump::PerFrame()
 		{
 			Debug::Log("[SyncDump] MaxFrames=%d reached at frame %d, stopping\n",
 				MaxFrames, frame);
+			SyncDump::Finish();
 			return;
 		}
 
@@ -173,6 +233,18 @@ void SyncDump::PerFrame()
 		lastDumpedFrame = frame;
 		++dumpedCount;
 	}
+}
+
+void SyncDump::Finish()
+{
+	if (!archive.IsOpen())
+		return;
+
+	const long long members = archive.MemberCount();
+	if (archive.Close())
+		Debug::Log("[SyncDump] Archive closed, %lld members\n", members);
+	else
+		Debug::Log("[SyncDump] Archive close FAILED (%s)\n", archive.LastError());
 }
 
 DEFINE_HOOK(0x55DDA0, MainLoop_AfterRender__SyncDump, 0x5)

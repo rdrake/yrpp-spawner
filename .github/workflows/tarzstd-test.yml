@@ -1,0 +1,34 @@
+name: TarZstd host test
+
+# The SYNCDUMP archive writer is portable C++ on purpose, so the part that can
+# be wrong in an interesting way -- ustar headers, member padding, zstd frame
+# boundaries -- is checked against the real `tar` on every push, rather than
+# waiting on a Windows build that can only prove it compiles.
+on:
+  push:
+    paths:
+      - 'src/Spawner/TarZstd.*'
+      - 'src/Spawner/ThirdParty/zstd/**'
+      - 'tests/**'
+      - '.github/workflows/tarzstd-test.yml'
+  pull_request:
+    paths:
+      - 'src/Spawner/TarZstd.*'
+      - 'src/Spawner/ThirdParty/zstd/**'
+      - 'tests/**'
+      - '.github/workflows/tarzstd-test.yml'
+  workflow_dispatch:
+
+jobs:
+  host-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The test shells out to `tar` and needs it to understand zstd; GNU tar
+      # on the runner does, via the zstd binary.
+      - name: Install zstd
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Run the TarZstd host test
+        run: ./tests/run_tarzstd_test.sh

@@ -74,6 +74,29 @@
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessSnapshot.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\RngDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\SyncDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\TarZstd.cpp" />
+    <!--
+      zstd 1.5.7, single-file amalgamation (build/single_file_libs). Every
+      setting below overrides a project-wide default this C library cannot
+      build under, so none of them is decoration:
+        CompileAsC        - it is C; the project's stdcpp20 default rejects it.
+        CallingConvention - the project builds /Gz (StdCall); zstd is cdecl and
+                            its internal function pointers require it. Paired
+                            with ZSTDLIB_VISIBLE=__cdecl so the DECLARATIONS in
+                            TarZstd.cpp match these definitions. A mismatch
+                            changes the decorated names, so it is a link error
+                            rather than a silent miscall.
+        WarningLevel      - the project is Level4; third-party C is not ours to
+                            clean up and its warnings would bury ours.
+        ConformanceMode   - kept off, as elsewhere in this project.
+    -->
+    <ClCompile Include="$(ThisDir)\src\Spawner\ThirdParty\zstd\zstd.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+      <PreprocessorDefinitions>ZSTDLIB_VISIBLE=__cdecl;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <!-- Utilities -->
     <ClCompile Include="$(ThisDir)\src\Utilities\Debug.cpp" />
     <ClCompile Include="$(ThisDir)\src\Utilities\Patch.cpp" />
