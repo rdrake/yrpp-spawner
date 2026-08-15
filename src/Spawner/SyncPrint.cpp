@@ -43,6 +43,7 @@
 #include <Utilities/Debug.h>
 
 #include <Windows.h>
+#include <cstdio>
 #include <cstring>
 
 SyncPrint::Mode SyncPrint::PrintMode = SyncPrint::Mode::Off;
@@ -538,10 +539,90 @@ namespace
 	size_t TypeCacheLen = 0;
 	int TypeCacheCount = -1;
 
+	// The immutability premise is measured MOSTLY true: the 2026-08-15 verify
+	// session's block shifted 3 times in 8,184 frames, single TeamType rows
+	// (the AI mutates team state). Recompute a rolling slice per frame
+	// (512/10,470 rows ~= 2.1 ms); a mismatch invalidates and the SAME call
+	// rebuilds fresh, so at most 20 frames ship stale bytes. Events go to
+	// META.TXT (the collected artifact) with the frame number; a CLIMBING
+	// count means a frame-varying type checksum has turned the cache into a
+	// rebuild-every-cycle loop (~+2 ms/frame) -- correct output, lost speed.
+	constexpr int RevalRowsPerFrame = 512;
+	int revalIdx = 0;
+	size_t revalOff = 0;
+	size_t typeFirstRowOff = 0;
+	long long typeStaleCount = 0;
+
+	// Emits fresh rows at `out` (inside Buf, so Guard() semantics hold) and
+	// restores `out` before returning. False = stale row found, cache dead.
+	bool RevalidateSlice(int count)
+	{
+		// A header-only cache (count 0) has no rows to check or index.
+		if (count <= 0)
+			return true;
+
+		char* const scratch = out;
+		for (int step = 0; step < RevalRowsPerFrame; ++step)
+		{
+			if (revalIdx >= count)
+			{
+				revalIdx = 0;
+				revalOff = typeFirstRowOff;
+			}
+			out = scratch;
+			RowType(AbstractTypeClass::Array.Items[revalIdx], revalIdx);
+			const size_t freshLen = static_cast<size_t>(out - scratch);
+			if (freshLen == 0)
+			{
+				// Guard tripped: buffer pressure, not a type mutation. The
+				// memcpy fit-check downstream reports that; keep the stale
+				// counter clean.
+				out = scratch;
+				return true;
+			}
+			// A cached row with no terminator is a broken invariant, never a
+			// legitimate match -- treat as stale unconditionally.
+			const void* nl = std::memchr(TypeCache + revalOff, '\n',
+				TypeCacheLen - revalOff);
+			bool stale = !nl;
+			size_t cachedLen = 0;
+			if (nl)
+			{
+				cachedLen = static_cast<size_t>(static_cast<const char*>(nl)
+					- (TypeCache + revalOff)) + 1;
+				stale = cachedLen != freshLen
+					|| std::memcmp(TypeCache + revalOff, scratch, freshLen) != 0;
+			}
+			if (stale)
+			{
+				++typeStaleCount;
+				char msg[128];
+				std::sprintf(msg, "TYPES stale idx=%d frame=%d event=%lld\n",
+					revalIdx, Unsorted::CurrentFrame,
+					static_cast<long long>(typeStaleCount));
+				// META.TXT is the artifact captures collect; the debug log
+				// has no recorded consumer.
+				if (FILE* pMeta = std::fopen("SYNCDUMP\\META.TXT", "at"))
+				{
+					std::fputs(msg, pMeta);
+					std::fclose(pMeta);
+				}
+				Debug::Log("[SyncPrint] %s", msg);
+				TypeCacheCount = -1;
+				out = scratch;
+				return false;
+			}
+			revalOff += cachedLen;
+			++revalIdx;
+		}
+		out = scratch;
+		return true;
+	}
+
 	void EmitAbstractTypes(bool useCache)
 	{
 		const int count = AbstractTypeClass::Array.Count;
-		if (useCache && TypeCacheCount == count)
+		if (useCache && TypeCacheCount == count && RevalidateSlice(count))
 		{
 			if (out + TypeCacheLen <= Buf + sizeof(Buf))
 			{
@@ -560,6 +641,12 @@ namespace
 			std::memcpy(TypeCache, start, len);
 			TypeCacheLen = len;
 			TypeCacheCount = count;
+			const void* nl = std::memchr(TypeCache, '\n', len);
+			typeFirstRowOff = nl
+				? static_cast<size_t>(static_cast<const char*>(nl) - TypeCache) + 1
+				: len;
+			revalIdx = 0;
+			revalOff = typeFirstRowOff;
 		}
 	}
 
