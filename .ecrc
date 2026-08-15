@@ -1,0 +1,13 @@
+{
+  "$comment": [
+    "editorconfig-checker config. src/Spawner/ThirdParty holds vendored",
+    "upstream sources (zstd 1.5.7's single-file amalgamation and its public",
+    "headers) which are space-indented where this project uses tabs.",
+    "Reformatting them would make the vendored copy diverge from upstream for",
+    "no benefit and turn every version bump into a conflict, so they are",
+    "excluded rather than fixed. Nothing we write lives under this path."
+  ],
+  "Exclude": [
+    "^src/Spawner/ThirdParty/"
+  ]
+}

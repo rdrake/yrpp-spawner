@@ -23,14 +23,27 @@
 // it flushes the engine's in-memory per-frame sync log (the ring buffer filled by
 // Game::LogFrameCRC whenever Game::EnableMPSyncDebug is set) to SYNC*.TXT via the
 // retail EventClass::Print_CRCs_All_Players writer, once per logic frame, and
-// collects the files under SYNCDUMP\. Read-only with respect to game state: it
-// never computes a CRC, draws a random number, or mutates the simulation.
+// collects the files under SYNCDUMP\. With SYNCDUMP.FastPrint the writer is
+// SyncPrint::Build instead (yes) or both, compared (verify); every producing
+// path draws from the sim RNG identically except verify, which draws twice
+// per frame and is therefore not trace-valid.
+//
+// When Archive is set (the default) each collected frame is appended to
+// SYNCDUMP\TRACE.tar.zst as it is produced and the plain ~1 MB file is deleted,
+// so a full-length trace costs ~120 MB of disk instead of ~14 GB. If the
+// archive cannot be opened, or any append fails, collection falls back to the
+// plain MoveFileExA path for the rest of the session: a capture that is merely
+// large beats a capture that is missing.
 class SyncDump
 {
 public:
 	static bool Enable;
 	static bool ComputeCRC;
 	static int MaxFrames;
+	static bool Archive;
+	static int ArchiveLevel;
 
 	static void PerFrame();
+	// Finalises the archive. Idempotent; safe when archiving is off.
+	static void Finish();
 };

@@ -34,6 +34,21 @@ public:
 	bool SyncDump;
 	bool SyncDumpComputeCRC;
 	int SyncDumpMaxFrames;
+	bool SyncDumpArchive;
+	int SyncDumpArchiveLevel;
+	char SyncDumpFastPrint[8];
+	char AstarDumpMode[8];
+	char CellDumpFrames[128];
+	bool DamageDump;
+	bool RngDump;
+	int RngDumpMaxFrames;
+	bool AnimDump;
+	int AnimDumpMaxFrames;
+	bool MissionDump;
+	int MissionDumpMaxFrames;
+	bool HarnessProbeEnabled;
+	char HarnessDir[64];
+	int HarnessSeed;
 
 	// Video
 	bool NoWindowFrame;
@@ -59,6 +74,27 @@ public:
 		, SyncDump { false }
 		, SyncDumpComputeCRC { true }
 		, SyncDumpMaxFrames { 5000 }
+		// Archiving defaults ON: a full-length trace is ~14 GB of plain files
+		// against ~120 MB archived, and that gap has already cost a
+		// measurement (a 3.97% sample where the whole corpus was wanted).
+		// Level 6 is the measured knee: 191x at 1.6 ms per captured frame,
+		// where 9 buys 5% more for a third again the time and 12 is slower
+		// AND slightly worse. Table in TarZstd.h.
+		, SyncDumpArchive { true }
+		, SyncDumpArchiveLevel { 6 }
+		, SyncDumpFastPrint { "no" }
+		, AstarDumpMode { "no" }
+		, CellDumpFrames { "" }
+		, DamageDump { false }
+		, RngDump { false }
+		, RngDumpMaxFrames { 0 }
+		, AnimDump { false }
+		, AnimDumpMaxFrames { 0 }
+		, MissionDump { false }
+		, MissionDumpMaxFrames { 0 }
+		, HarnessProbeEnabled { false }
+		, HarnessDir { "HARNESS" }
+		, HarnessSeed { 0 }
 
 		// Video
 		, DDrawTargetFPS { -1 }

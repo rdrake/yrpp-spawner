@@ -18,12 +18,24 @@
 */
 
 #include "Main.Config.h"
+#include <Spawner/AnimDump.h>
+#include <Spawner/AstarDump.h>
+#include <Spawner/CellDump.h>
+#include <Spawner/DamageDump.h>
+#include <Spawner/HarnessProbe.h>
+#include <Spawner/MissionDump.h>
+#include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
+#include <Spawner/SyncPrint.h>
+#include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
 
 #include <CCINIClass.h>
 #include <GameOptionsClass.h>
 #include <Unsorted.h>
+
+#include <cstdlib>
+#include <cstring>
 
 void MainConfig::LoadFromINIFile()
 {
@@ -46,6 +58,21 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDump             = pINI->ReadBool(pOptionsSection, "SYNCDUMP", this->SyncDump);
 		this->SyncDumpComputeCRC   = pINI->ReadBool(pOptionsSection, "SYNCDUMP.ComputeCRC", this->SyncDumpComputeCRC);
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
+		this->SyncDumpArchive      = pINI->ReadBool(pOptionsSection, "SYNCDUMP.Archive", this->SyncDumpArchive);
+		this->SyncDumpArchiveLevel = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.ArchiveLevel", this->SyncDumpArchiveLevel);
+		pINI->ReadString(pOptionsSection, "SYNCDUMP.FastPrint", this->SyncDumpFastPrint, this->SyncDumpFastPrint, sizeof(this->SyncDumpFastPrint));
+		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
+		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
+		this->DamageDump           = pINI->ReadBool(pOptionsSection, "DAMAGEDUMP", this->DamageDump);
+		this->RngDump              = pINI->ReadBool(pOptionsSection, "RNGDUMP", this->RngDump);
+		this->RngDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "RNGDUMP.MaxFrames", this->RngDumpMaxFrames);
+		this->AnimDump             = pINI->ReadBool(pOptionsSection, "ANIMDUMP", this->AnimDump);
+		this->AnimDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "ANIMDUMP.MaxFrames", this->AnimDumpMaxFrames);
+		this->MissionDump          = pINI->ReadBool(pOptionsSection, "MISSIONDUMP", this->MissionDump);
+		this->MissionDumpMaxFrames = pINI->ReadInteger(pOptionsSection, "MISSIONDUMP.MaxFrames", this->MissionDumpMaxFrames);
+		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
+		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
+		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
 	}
 
 	const char* pVideoSection = "Video";
@@ -85,7 +112,162 @@ void MainConfig::ApplyStaticOptions()
 		SyncDump::Enable = true;
 		SyncDump::ComputeCRC = this->SyncDumpComputeCRC;
 		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
+		SyncDump::Archive = this->SyncDumpArchive;
+		SyncDump::ArchiveLevel = this->SyncDumpArchiveLevel;
+
+		if (_stricmp(this->SyncDumpFastPrint, "yes") == 0)
+		{
+			SyncPrint::PrintMode = SyncPrint::Mode::Fast;
+			Debug::Log("[SyncPrint] Fast print armed\n");
+		}
+		else if (_stricmp(this->SyncDumpFastPrint, "verify") == 0)
+		{
+			SyncPrint::PrintMode = SyncPrint::Mode::Verify;
+			Debug::Log("[SyncPrint] Verify mode armed (sessions are not trace-valid)\n");
+		}
 	}
+
+	if (_stricmp(this->AstarDumpMode, "yes") == 0)
+	{
+		AstarDump::Enable = true;
+		AstarDump::CaptureMode = AstarDump::Mode::Narrow;
+		Debug::Log("[AstarDump] Armed (mode=narrow)\n");
+	}
+	else if (_stricmp(this->AstarDumpMode, "all") == 0)
+	{
+		AstarDump::Enable = true;
+		AstarDump::CaptureMode = AstarDump::Mode::All;
+		Debug::Log("[AstarDump] Armed (mode=all)\n");
+	}
+	else
+	{
+		AstarDump::Enable = false;
+		AstarDump::CaptureMode = AstarDump::Mode::Disabled;
+	}
+
+	// HARNESS.Probe=yes - read-only driving-harness evidence probe
+	// (Spawner/HarnessProbe.cpp). HARNESS.Dir names its working directory
+	// relative to the game dir. Off by default; strictly read-only, so it is
+	// safe to leave armed alongside the dump hooks.
+	{
+		HarnessProbe::Enable = this->HarnessProbeEnabled;
+		if (HarnessProbe::Enable)
+		{
+			// Fixed-size copy into DLL-owned storage; always NUL-terminated.
+			std::strncpy(HarnessProbe::Dir, this->HarnessDir, HarnessProbe::MaxDirLen - 1);
+			HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
+			if (!HarnessProbe::Dir[0])
+			{
+				std::strncpy(HarnessProbe::Dir, "HARNESS", HarnessProbe::MaxDirLen - 1);
+				HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
+			}
+			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only)\n", HarnessProbe::Dir);
+		}
+	}
+
+	// HARNESS.Seed=<int> - pin the simulation RNG so a scenario can be replayed.
+	//
+	// spawn.ini's Seed= does NOT do this: Spawner::GetConfig()->Seed feeds only
+	// random-MAP generation (RandomMap.cpp). The simulation draws from
+	// Game::Seed (0xA8ED94), which in single player is seeded from the system
+	// timer and pinned by nothing -- two identical skirmishes diverge.
+	//
+	// The engine already has a dormant override slot for exactly this. At
+	// 0x52FDD4, immediately before Game::Seed is assigned:
+	//
+	//     mov  eax, [0xA8ED98]     ; preset seed
+	//     test eax, eax
+	//     jne  0x52FDF4            ; nonzero -> use it verbatim
+	//     ...  call [0x7E1138]     ; else the system timer
+	//     mov  [0xA8ED94], eax     ; Game::Seed = eax
+	//
+	// 0xA8ED98 has exactly ONE reference in the whole image -- that read. No
+	// engine code ever writes it, so it is permanently zero in stock play.
+	// Storing to it here therefore needs no hook and cannot race the engine:
+	// the value simply survives until each scenario picks it up.
+	//
+	// Zero (the default) is indistinguishable from "unset" to the engine, so
+	// it means "leave stock behaviour alone" -- a seed of 0 cannot be pinned.
+	{
+		HarnessProbe::PinnedSeed = this->HarnessSeed;
+		if (HarnessProbe::PinnedSeed != 0)
+		{
+			*reinterpret_cast<int*>(0xA8ED98) = HarnessProbe::PinnedSeed;
+			Debug::Log("[HarnessProbe] Seed pinned to %08X\n", HarnessProbe::PinnedSeed);
+		}
+	}
+
+	// CELLDUMP.Frames=<frame>[,<frame>...] - whole-map per-cell pathfinding
+	// snapshots (Spawner/CellDump.cpp). Empty (the default) leaves it off.
+	// Malformed tokens are skipped; at most CellDump::MaxDumpFrames entries.
+	{
+		CellDump::FrameCount = 0;
+		const char* p = this->CellDumpFrames;
+		while (*p && CellDump::FrameCount < CellDump::MaxDumpFrames)
+		{
+			while (*p == ',' || *p == ' ')
+				++p;
+			if (!*p)
+				break;
+			char* end = nullptr;
+			const long v = strtol(p, &end, 10);
+			if (end == p)
+			{
+				// Non-numeric garbage: skip to the next separator.
+				while (*p && *p != ',')
+					++p;
+				continue;
+			}
+			if (v >= 0)
+				CellDump::Frames[CellDump::FrameCount++] = static_cast<int>(v);
+			p = end;
+		}
+		CellDump::Enable = (CellDump::FrameCount > 0);
+		if (CellDump::Enable)
+		{
+			Debug::Log("[CellDump] Armed (%d dump frame(s): %s)\n",
+				CellDump::FrameCount, this->CellDumpFrames);
+		}
+	}
+
+	// DAMAGEDUMP=yes - trace every GetTotalDamage call (Spawner/DamageDump.cpp).
+	DamageDump::Enable = this->DamageDump;
+	if (DamageDump::Enable)
+		Debug::Log("[DamageDump] Armed\n");
+
+	// RNGDUMP=yes - record the caller EIP of every Randomizer draw, making draw
+	// ATTRIBUTION exact instead of inferred (Spawner/RngDump.cpp).
+	// RNGDUMP.MaxFrames=<n> stops appending past frame n; 0 (the default) means
+	// unlimited and lets RngDump::MaxRows be the only bound.
+	RngDump::Enable = this->RngDump;
+	RngDump::MaxFrames = this->RngDumpMaxFrames;
+	if (RngDump::Enable)
+		Debug::Log("[RngDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			RngDump::MaxFrames, RngDump::MaxRows);
+
+	// ANIMDUMP=yes - per-frame per-anim raw state (owner pointer, raw Location,
+	// limbo flag, stable instance identity), the observables the flame-detach
+	// question pre-registered and SYNCDUMP cannot record (Spawner/AnimDump.cpp).
+	// ANIMDUMP.MaxFrames=<n> stops appending past frame n; 0 (the default)
+	// means unlimited and lets AnimDump::MaxRows be the only bound.
+	AnimDump::Enable = this->AnimDump;
+	AnimDump::MaxFrames = this->AnimDumpMaxFrames;
+	if (AnimDump::Enable)
+		Debug::Log("[AnimDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			AnimDump::MaxFrames, AnimDump::MaxRows);
+
+	// MISSIONDUMP=yes - per-frame per-object mission state, including the two
+	// fields the Ares SYNCDUMP row does NOT print: the mission timer's raw
+	// remaining count (+0xD0) and MissionStatus (+0xBC). See
+	// Spawner/MissionDump.h for why this is a separate dump and not two more
+	// columns on the Ares row. MISSIONDUMP.MaxFrames=<n> stops appending past
+	// frame n; 0 (the default) means unlimited and lets MissionDump::MaxRows
+	// be the only bound.
+	MissionDump::Enable = this->MissionDump;
+	MissionDump::MaxFrames = this->MissionDumpMaxFrames;
+	if (MissionDump::Enable)
+		Debug::Log("[MissionDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			MissionDump::MaxFrames, MissionDump::MaxRows);
 
 	if (this->SingleProcAffinity)
 	{
