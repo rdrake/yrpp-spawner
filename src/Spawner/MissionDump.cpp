@@ -65,6 +65,10 @@ static_assert(offsetof(MissionClass, MissionAccumulateTime) == 0xC4, "MissionCla
 static_assert(offsetof(MissionClass, UpdateTimer) == 0xC8, "MissionClass::UpdateTimer moved");
 static_assert(offsetof(CDTimerClass, StartTime) == 0x0, "CDTimerClass::StartTime moved");
 static_assert(offsetof(CDTimerClass, TimeLeft) == 0x8, "CDTimerClass::TimeLeft moved");
+// The one field that is NOT on MissionClass. Four ratwo draw sites gate on it
+// and no dump carried it; reference/yrpp_struct_fields.csv row
+// "InfantryClass,1732,SequenceAnim,enum,Sequence" is 0x6C4.
+static_assert(offsetof(InfantryClass, SequenceAnim) == 0x6C4, "InfantryClass::SequenceAnim moved");
 
 namespace
 {
@@ -133,15 +137,17 @@ namespace
 		// Raw-offset provenance of each column, for the parser's benefit.
 		// timer_start/time_left are the RAW STORED TimerStruct pair, NOT
 		// GetTimeLeft() - see the header comment.
+		// sequence is off InfantryClass, not MissionClass, so it is -1 on every
+		// U/A/B row - see SequenceOf.
 		std::fprintf(pFile,
 			"OFFSETS=mission:AC,suspended:B0,queued:B4,status:BC,startframe:C0,accum:C4,"
-			"timer_start:C8,time_left:D0,uid:10\n");
+			"timer_start:C8,time_left:D0,uid:10,sequence:6C4\n");
 		// cat is I/U/A/B and idx is the object's position in that category's
 		// engine array - the same ordinal Ares prints as #NNNNN. A within-frame
 		// key only; ptr/uid are the cross-frame identity.
 		std::fprintf(pFile,
 			"COLUMNS.M=frame,cat,idx,ptr,uid,mission,queued,suspended,status,startframe,accum,"
-			"timer_start,time_left\n");
+			"timer_start,time_left,sequence\n");
 		std::fprintf(pFile, "COLUMNS.F=frame,infantry,units,aircraft,buildings\n");
 		Debug::Log("[MissionDump] Opened %s\n", path);
 		return true;
@@ -180,13 +186,23 @@ namespace
 		return EnsureFile();
 	}
 
+	// SequenceAnim lives on InfantryClass, so it is read at the ONE call site
+	// whose static type has it and is -1 everywhere else. Overloads rather than
+	// a cast: a fifth category added to PerFrame stops compiling here instead of
+	// reading 0x6C4 off an object that does not extend that far.
+	int SequenceOf(const InfantryClass* pObj) { return static_cast<int>(pObj->SequenceAnim); }
+	int SequenceOf(const UnitClass*) { return -1; }
+	int SequenceOf(const AircraftClass*) { return -1; }
+	int SequenceOf(const BuildingClass*) { return -1; }
+
 	// One object's row. Every read here is a plain field load off the
 	// MissionClass sub-object; `pObj` is a TechnoClass-family pointer, and
 	// MissionClass is an unambiguous single-inheritance base of all four
-	// categories (mdisp 0), so the upcast is a no-op.
-	void EmitRow(int frame, char cat, int idx, const MissionClass* pObj)
+	// categories (mdisp 0), so the upcast is a no-op. `sequence` is the one
+	// exception and is resolved by the caller.
+	void EmitRow(int frame, char cat, int idx, const MissionClass* pObj, int sequence)
 	{
-		std::fprintf(pFile, "M=%d,%c,%d,%08X,%u,%d,%d,%d,%d,%d,%d,%d,%d\n",
+		std::fprintf(pFile, "M=%d,%c,%d,%08X,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
 			frame,
 			cat,
 			idx,
@@ -199,7 +215,8 @@ namespace
 			pObj->CurrentMissionStartTime,
 			pObj->MissionAccumulateTime,
 			pObj->UpdateTimer.StartTime,
-			pObj->UpdateTimer.TimeLeft);
+			pObj->UpdateTimer.TimeLeft,
+			sequence);
 
 		++MissionDump::RowCount;
 		if (++sinceFlush >= FlushEvery)
@@ -225,7 +242,7 @@ namespace
 			// join key. Emit nothing but keep counting.
 			if (pObj)
 			{
-				EmitRow(frame, cat, idx, pObj);
+				EmitRow(frame, cat, idx, pObj, SequenceOf(pObj));
 				++written;
 			}
 			++idx;
