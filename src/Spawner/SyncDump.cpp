@@ -87,12 +87,42 @@ namespace
 		return ticks * 1000000ll / freq;
 	}
 
+	// Chrome Trace Event stream (Perfetto/chrome://tracing), JSON Array
+	// Format: the spec makes the closing ] optional (the Object Format has no
+	// such clause), and both importers additionally strip a trailing comma,
+	// so a killed process leaves a loadable trace; fflush per frame bounds
+	// the loss to one CRT buffer.
+	FILE* pTrace = nullptr;
+	long long traceT0 = 0;
+
+	void EmitPhase(const char* name, long long t0, long long dur, int frame)
+	{
+		// t0 < traceT0: a hook slice that began before this session's trace
+		// opened (first frame, or the new-game transition) -- init cost, not
+		// phase cost, and a negative ts renders before trace start.
+		if (!pTrace || dur <= 0 || t0 < traceT0)
+			return;
+		fprintf(pTrace,
+			"{\"ph\":\"X\",\"pid\":1,\"tid\":1,\"name\":\"%s\",\"ts\":%lld,"
+			"\"dur\":%lld,\"args\":{\"frame\":%d}},\n",
+			name, TicksToUs(t0 - traceT0), TicksToUs(dur), frame);
+	}
+
 	// Covers every return path of PerFrame, so hook - (crc+print+collect) is a
 	// measured residual rather than an assumption that nothing else costs.
 	struct HookTimer
 	{
 		long long t0 = Ticks();
-		~HookTimer() { hookTicks += Ticks() - t0; }
+		int frame = 0;
+		~HookTimer()
+		{
+			const long long dur = Ticks() - t0;
+			hookTicks += dur;
+			// frame <= 0 is the pre-game early return; those slices would
+			// land in the PREVIOUS game's still-open trace.
+			if (frame > 0)
+				EmitPhase("hook", t0, dur, frame);
+		}
 	};
 
 	int SlotLoggedFrame(int slot)
@@ -125,7 +155,9 @@ namespace
 
 				const long long t0 = Ticks();
 				const bool appended = archive.AppendFile(member, fd.cFileName);
-				appendTicks += Ticks() - t0;
+				const long long dur = Ticks() - t0;
+				appendTicks += dur;
+				EmitPhase("append", t0, dur, frame);
 				if (appended)
 				{
 					// The whole point: the uncompressed ~1 MB never persists.
@@ -187,6 +219,26 @@ namespace
 			fclose(pFile);
 		}
 
+		// A pinned seed repeats across games; never truncate an earlier trace
+		// (the DAMAGEDUMP lesson) -- probe a free _<n> suffix instead.
+		char tracePath[MAX_PATH];
+		sprintf(tracePath, "%s\\PHASES_%08X.json", DumpDir,
+			static_cast<unsigned int>(Game::Seed));
+		for (int n = 1; n < 1000 && GetFileAttributesA(tracePath) != INVALID_FILE_ATTRIBUTES; ++n)
+			sprintf(tracePath, "%s\\PHASES_%08X_%d.json", DumpDir,
+				static_cast<unsigned int>(Game::Seed), n);
+		// Re-probe after the loop: on suffix exhaustion the last candidate
+		// still exists, and opening it "wt" would be exactly the truncation
+		// the probe exists to prevent.
+		pTrace = GetFileAttributesA(tracePath) == INVALID_FILE_ATTRIBUTES
+			? fopen(tracePath, "wt") : nullptr;
+		if (pTrace)
+		{
+			traceT0 = Ticks();
+			fprintf(pTrace, "[\n");
+			Debug::Log("[SyncDump] Tracing phases to %s\n", tracePath);
+		}
+
 		Debug::Log("[SyncDump] Armed: Seed=%08X StartFrame=%d MaxFrames=%d ComputeCRC=%d\n",
 			Game::Seed, Unsorted::CurrentFrame, SyncDump::MaxFrames, SyncDump::ComputeCRC);
 	}
@@ -200,6 +252,7 @@ void SyncDump::PerFrame()
 	HookTimer hookTimer;
 
 	const int currentFrame = Unsorted::CurrentFrame;
+	hookTimer.frame = currentFrame;
 	if (currentFrame <= 0)
 		return;
 
@@ -264,7 +317,9 @@ void SyncDump::PerFrame()
 			lastComputedFrame = currentFrame;
 			const long long t0 = Ticks();
 			Game::ComputeFrameCRC();
-			crcTicks += Ticks() - t0;
+			const long long dur = Ticks() - t0;
+			crcTicks += dur;
+			EmitPhase("crc", t0, dur, frame);
 			// Mirror the network path's history stamp (0x6476A5) so the
 			// dump's CRC[] table carries the per-frame CRC values; inert
 			// otherwise (only the desync detector reads it, on peer events).
@@ -278,8 +333,13 @@ void SyncDump::PerFrame()
 		EventClass::Print_CRCs_All_Players(slot, nullptr);
 		const long long tCollect = Ticks();
 		CollectSyncFiles("F", frame);
+		const long long tEnd = Ticks();
 		printTicks += tCollect - tPrint;
-		collectTicks += Ticks() - tCollect;
+		collectTicks += tEnd - tCollect;
+		EmitPhase("print", tPrint, tCollect - tPrint, frame);
+		EmitPhase("collect", tCollect, tEnd - tCollect, frame);
+		if (pTrace)
+			fflush(pTrace);
 		lastDumpedFrame = frame;
 		++dumpedCount;
 
@@ -314,6 +374,14 @@ void SyncDump::PerFrame()
 
 void SyncDump::Finish()
 {
+	// Before the archive early-return: plain-file sessions still carry a
+	// trace, and the Array Format's closing ] is optional per spec.
+	if (pTrace)
+	{
+		fclose(pTrace);
+		pTrace = nullptr;
+	}
+
 	if (!archive.IsOpen())
 		return;
 
