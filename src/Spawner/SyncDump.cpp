@@ -59,6 +59,42 @@ namespace
 	// nothing here depends on the destructor running at DLL unload.
 	TarZstdWriter archive;
 
+	// Phase timers: where inside this hook the frame time goes. The 2026-08-15
+	// overhead matrix priced the whole hook at 20.6 ms/frame but cannot split
+	// engine-CRC vs engine-print vs collect/compress; these accumulators can.
+	long long hookTicks = 0;
+	long long crcTicks = 0;
+	long long printTicks = 0;
+	long long collectTicks = 0;
+	long long appendTicks = 0;
+	constexpr int PhaseLogEvery = 500;
+
+	long long Ticks()
+	{
+		LARGE_INTEGER li;
+		QueryPerformanceCounter(&li);
+		return li.QuadPart;
+	}
+
+	long long TicksToUs(long long ticks)
+	{
+		static long long freq = 0;
+		if (!freq)
+		{
+			LARGE_INTEGER li;
+			freq = QueryPerformanceFrequency(&li) ? li.QuadPart : 1;
+		}
+		return ticks * 1000000ll / freq;
+	}
+
+	// Covers every return path of PerFrame, so hook - (crc+print+collect) is a
+	// measured residual rather than an assumption that nothing else costs.
+	struct HookTimer
+	{
+		long long t0 = Ticks();
+		~HookTimer() { hookTicks += Ticks() - t0; }
+	};
+
 	int SlotLoggedFrame(int slot)
 	{
 		return *reinterpret_cast<const int*>(
@@ -87,7 +123,10 @@ namespace
 				char member[MAX_PATH];
 				sprintf(member, "%s/%s%07d_%s", DumpDir, prefix, frame, fd.cFileName);
 
-				if (archive.AppendFile(member, fd.cFileName))
+				const long long t0 = Ticks();
+				const bool appended = archive.AppendFile(member, fd.cFileName);
+				appendTicks += Ticks() - t0;
+				if (appended)
 				{
 					// The whole point: the uncompressed ~1 MB never persists.
 					// `continue` in a do/while jumps to the CONDITION, i.e. to
@@ -158,6 +197,8 @@ void SyncDump::PerFrame()
 	if (!Enable || !Game::EnableMPSyncDebug)
 		return;
 
+	HookTimer hookTimer;
+
 	const int currentFrame = Unsorted::CurrentFrame;
 	if (currentFrame <= 0)
 		return;
@@ -173,6 +214,9 @@ void SyncDump::PerFrame()
 		lastComputedFrame = 0;
 		dumpedCount = 0;
 		sessionInitialized = false;
+		// Partial window discarded, not merged into game 2's first window --
+		// same kill semantics as the archive above.
+		hookTicks = crcTicks = printTicks = collectTicks = appendTicks = 0;
 	}
 
 	if (MaxFrames > 0 && dumpedCount >= MaxFrames)
@@ -218,7 +262,9 @@ void SyncDump::PerFrame()
 				continue;
 
 			lastComputedFrame = currentFrame;
+			const long long t0 = Ticks();
 			Game::ComputeFrameCRC();
+			crcTicks += Ticks() - t0;
 			// Mirror the network path's history stamp (0x6476A5) so the
 			// dump's CRC[] table carries the per-frame CRC values; inert
 			// otherwise (only the desync detector reads it, on peer events).
@@ -228,10 +274,41 @@ void SyncDump::PerFrame()
 				continue;
 		}
 
+		const long long tPrint = Ticks();
 		EventClass::Print_CRCs_All_Players(slot, nullptr);
+		const long long tCollect = Ticks();
 		CollectSyncFiles("F", frame);
+		printTicks += tCollect - tPrint;
+		collectTicks += Ticks() - tCollect;
 		lastDumpedFrame = frame;
 		++dumpedCount;
+
+		// Windowed, not cumulative, so growth with object count is visible
+		// across a run. dumps= counts dumped frames (not engine frames --
+		// frame= is the correlation key into the archive); append is a subset
+		// of collect, not a fifth phase; hook excludes the in-progress call.
+		if (dumpedCount % PhaseLogEvery == 0)
+		{
+			char line[256];
+			sprintf(line, "PHASES dumps=%d..%d frame=%d hook=%lldus crc=%lldus"
+				" print=%lldus collect=%lldus append=%lldus\n",
+				dumpedCount - PhaseLogEvery + 1, dumpedCount, frame,
+				TicksToUs(hookTicks), TicksToUs(crcTicks), TicksToUs(printTicks),
+				TicksToUs(collectTicks), TicksToUs(appendTicks));
+
+			// META.TXT is the one line-oriented artifact the capture pipeline
+			// demonstrably collects; the debug log has no recorded consumer.
+			char meta[MAX_PATH];
+			sprintf(meta, "%s\\META.TXT", DumpDir);
+			if (FILE* pMeta = fopen(meta, "at"))
+			{
+				fputs(line, pMeta);
+				fclose(pMeta);
+			}
+			Debug::Log("[SyncDump] %s", line);
+
+			hookTicks = crcTicks = printTicks = collectTicks = appendTicks = 0;
+		}
 	}
 }
 
