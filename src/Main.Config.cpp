@@ -26,6 +26,7 @@
 #include <Spawner/MissionDump.h>
 #include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
+#include <Spawner/SyncPrint.h>
 #include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
 
@@ -59,6 +60,7 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
 		this->SyncDumpArchive      = pINI->ReadBool(pOptionsSection, "SYNCDUMP.Archive", this->SyncDumpArchive);
 		this->SyncDumpArchiveLevel = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.ArchiveLevel", this->SyncDumpArchiveLevel);
+		pINI->ReadString(pOptionsSection, "SYNCDUMP.FastPrint", this->SyncDumpFastPrint, this->SyncDumpFastPrint, sizeof(this->SyncDumpFastPrint));
 		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
 		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
 		this->DamageDump           = pINI->ReadBool(pOptionsSection, "DAMAGEDUMP", this->DamageDump);
@@ -112,6 +114,17 @@ void MainConfig::ApplyStaticOptions()
 		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
 		SyncDump::Archive = this->SyncDumpArchive;
 		SyncDump::ArchiveLevel = this->SyncDumpArchiveLevel;
+
+		if (_stricmp(this->SyncDumpFastPrint, "yes") == 0)
+		{
+			SyncPrint::PrintMode = SyncPrint::Mode::Fast;
+			Debug::Log("[SyncPrint] Fast print armed\n");
+		}
+		else if (_stricmp(this->SyncDumpFastPrint, "verify") == 0)
+		{
+			SyncPrint::PrintMode = SyncPrint::Mode::Verify;
+			Debug::Log("[SyncPrint] Verify mode armed (sessions are not trace-valid)\n");
+		}
 	}
 
 	if (_stricmp(this->AstarDumpMode, "yes") == 0)

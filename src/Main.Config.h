@@ -36,6 +36,7 @@ public:
 	int SyncDumpMaxFrames;
 	bool SyncDumpArchive;
 	int SyncDumpArchiveLevel;
+	char SyncDumpFastPrint[8];
 	char AstarDumpMode[8];
 	char CellDumpFrames[128];
 	bool DamageDump;
@@ -81,6 +82,7 @@ public:
 		// AND slightly worse. Table in TarZstd.h.
 		, SyncDumpArchive { true }
 		, SyncDumpArchiveLevel { 6 }
+		, SyncDumpFastPrint { "no" }
 		, AstarDumpMode { "no" }
 		, CellDumpFrames { "" }
 		, DamageDump { false }

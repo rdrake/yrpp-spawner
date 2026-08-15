@@ -18,16 +18,20 @@
 */
 
 #include "SyncDump.h"
+#include "SyncPrint.h"
 #include "TarZstd.h"
 
 #include <Helpers/Macro.h>
 #include <Utilities/Debug.h>
 #include <Unsorted.h>
 #include <EventClass.h>
+#include <HouseClass.h>
 
 #include <Windows.h>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 bool SyncDump::Enable = false;
 bool SyncDump::ComputeCRC = true;
@@ -51,6 +55,7 @@ namespace
 	int lastComputedFrame = 0;
 	int dumpedCount = 0;
 	bool sessionInitialized = false;
+	bool verifyWarned = false;
 
 	// Finalised by SyncDump::Finish() on the paths that actually end a capture
 	// (MaxFrames reached, or a new game in the same process). A process killed
@@ -184,6 +189,149 @@ namespace
 		FindClose(hFind);
 	}
 
+	// Fast mode: the built buffer goes straight into the archive under
+	// exactly the member name CollectSyncFiles would have produced for the
+	// engine-written SYNC%01d_%03d.TXT, same frame-stamp semantics.
+	void WriteBuilt(const char* buf, size_t len, int frame, int slot)
+	{
+		// Build() tolerates a null CurrentPlayer; the filename must too.
+		const int player = HouseClass::CurrentPlayer
+			? HouseClass::CurrentPlayer->ArrayIndex : 0;
+		if (archive.IsOpen())
+		{
+			char member[MAX_PATH];
+			sprintf(member, "%s/F%07d_SYNC%01d_%03d.TXT", DumpDir, frame, player, slot);
+
+			const long long t0 = Ticks();
+			const bool appended = archive.AppendBytes(member, buf, len);
+			const long long dur = Ticks() - t0;
+			appendTicks += dur;
+			EmitPhase("append", t0, dur, frame);
+			if (appended)
+				return;
+
+			Debug::Log("[SyncDump] Archive append failed at frame %d (%s);"
+				" falling back to plain files\n", frame, archive.LastError());
+			archive.Close();
+		}
+
+		char dst[MAX_PATH];
+		sprintf(dst, "%s\\F%07d_SYNC%01d_%03d.TXT", DumpDir, frame, player, slot);
+		if (FILE* pFile = fopen(dst, "wb")) // buffer already carries \r\n
+		{
+			fwrite(buf, 1, len, pFile);
+			fclose(pFile);
+		}
+	}
+
+	// The one line whose bytes differ by construction in Verify mode: the
+	// engine call and Build() each drew their own random number.
+	void RandomLineSpan(const char* p, size_t n, size_t& start, size_t& len)
+	{
+		static const char key[] = "\r\nMy Random Number: ";
+		constexpr size_t klen = sizeof(key) - 1;
+		for (size_t i = 0; i + klen + 8 <= n; ++i)
+		{
+			if (p[i] == '\r' && std::memcmp(p + i, key, klen) == 0)
+			{
+				start = i + klen;
+				len = 8; // %08lX
+				return;
+			}
+		}
+		start = n;
+		len = 0;
+	}
+
+	void VerifyBuilt(const char* ours, size_t ourLen, int frame, int slot)
+	{
+		char line[192];
+		char name[MAX_PATH];
+		sprintf(name, "SYNC%01d_%03d.TXT",
+			HouseClass::CurrentPlayer ? HouseClass::CurrentPlayer->ArrayIndex : 0, slot);
+
+		char* theirs = nullptr;
+		size_t theirLen = 0;
+		if (FILE* pFile = fopen(name, "rb"))
+		{
+			fseek(pFile, 0, SEEK_END);
+			theirLen = static_cast<size_t>(ftell(pFile));
+			fseek(pFile, 0, SEEK_SET);
+			theirs = static_cast<char*>(malloc(theirLen ? theirLen : 1));
+			if (theirs)
+				theirLen = fread(theirs, 1, theirLen, pFile);
+			fclose(pFile);
+		}
+
+		if (!theirs)
+		{
+			sprintf(line, "[SyncPrint] VERIFY frame=%d result=NOFILE %s\n", frame, name);
+		}
+		else
+		{
+			size_t oSkip, oSkipLen, tSkip, tSkipLen;
+			RandomLineSpan(ours, ourLen, oSkip, oSkipLen);
+			RandomLineSpan(theirs, theirLen, tSkip, tSkipLen);
+
+			bool identical = true;
+			size_t diffOff = 0;
+			unsigned char ca = 0, cb = 0;
+			size_t i = 0, j = 0;
+			while (i < ourLen && j < theirLen)
+			{
+				if (i >= oSkip && i < oSkip + oSkipLen)
+				{
+					++i;
+					continue;
+				}
+				if (j >= tSkip && j < tSkip + tSkipLen)
+				{
+					++j;
+					continue;
+				}
+				if (ours[i] != theirs[j])
+				{
+					identical = false;
+					diffOff = i;
+					ca = static_cast<unsigned char>(ours[i]);
+					cb = static_cast<unsigned char>(theirs[j]);
+					break;
+				}
+				++i;
+				++j;
+			}
+			while (i >= oSkip && i < oSkip + oSkipLen)
+				++i;
+			while (j >= tSkip && j < tSkip + tSkipLen)
+				++j;
+			if (identical && (i != ourLen || j != theirLen))
+			{
+				identical = false;
+				diffOff = i;
+				ca = i < ourLen ? static_cast<unsigned char>(ours[i]) : 0;
+				cb = j < theirLen ? static_cast<unsigned char>(theirs[j]) : 0;
+			}
+			free(theirs);
+
+			if (identical)
+				sprintf(line, "[SyncPrint] VERIFY frame=%d result=IDENTICAL bytes=%u\n",
+					frame, static_cast<unsigned>(ourLen));
+			else
+				sprintf(line, "[SyncPrint] VERIFY frame=%d result=DIFF offset=%u"
+					" ours=%02X theirs=%02X\n",
+					frame, static_cast<unsigned>(diffOff), ca, cb);
+		}
+
+		Debug::Log("%s", line);
+		char meta[MAX_PATH];
+		sprintf(meta, "%s\\META.TXT", DumpDir);
+		if (FILE* pMeta = fopen(meta, "at"))
+		{
+			fputs(line, pMeta);
+			fclose(pMeta);
+		}
+	}
+
 	void InitSessionOnce()
 	{
 		if (sessionInitialized)
@@ -267,6 +415,8 @@ void SyncDump::PerFrame()
 		lastComputedFrame = 0;
 		dumpedCount = 0;
 		sessionInitialized = false;
+		verifyWarned = false;
+		SyncPrint::InvalidateTypeCache();
 		// Partial window discarded, not merged into game 2's first window --
 		// same kill semantics as the archive above.
 		hookTicks = crcTicks = printTicks = collectTicks = appendTicks = 0;
@@ -329,9 +479,42 @@ void SyncDump::PerFrame()
 				continue;
 		}
 
+		// print covers row production, whoever produces it: the engine call
+		// (Off), Build (Fast), or both (Verify). All file I/O -- AppendBytes
+		// or the plain-file write in Fast mode, the verify compare, and the
+		// stray sweep -- lands in collect; append stays the archive-write
+		// subset of collect.
 		const long long tPrint = Ticks();
-		EventClass::Print_CRCs_All_Players(slot, nullptr);
+		const char* built = nullptr;
+		size_t builtLen = 0;
+		switch (SyncPrint::PrintMode)
+		{
+		case SyncPrint::Mode::Off:
+			EventClass::Print_CRCs_All_Players(slot, nullptr);
+			break;
+		case SyncPrint::Mode::Fast:
+			built = SyncPrint::Build(slot, builtLen);
+			break;
+		case SyncPrint::Mode::Verify:
+			if (!verifyWarned)
+			{
+				verifyWarned = true;
+				Debug::Log("[SyncPrint] VERIFY mode: Build() draws a SECOND"
+					" rng number each frame -- this session is NOT trace-valid\n");
+			}
+			// Ares writes its file first (one draw), then Build (a second).
+			EventClass::Print_CRCs_All_Players(slot, nullptr);
+			built = SyncPrint::Build(slot, builtLen);
+			break;
+		}
 		const long long tCollect = Ticks();
+		if (SyncPrint::PrintMode == SyncPrint::Mode::Fast)
+			WriteBuilt(built, builtLen, frame, slot);
+		else if (SyncPrint::PrintMode == SyncPrint::Mode::Verify)
+			VerifyBuilt(built, builtLen, frame, slot);
+		// In Fast mode this is a stray-file sweep that normally finds
+		// nothing; in Verify it archives Ares's file -- ground truth stays
+		// in the archive there.
 		CollectSyncFiles("F", frame);
 		const long long tEnd = Ticks();
 		printTicks += tCollect - tPrint;

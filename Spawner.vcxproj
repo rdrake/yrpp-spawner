@@ -74,6 +74,7 @@
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessSnapshot.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\RngDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\SyncDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\SyncPrint.cpp" />
     <!--
       Cdecl, not the project's /Gz default: this TU includes zstd.h, and its
       undecorated declarations must match zstd.c's definitions below. The
@@ -144,6 +145,8 @@
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessSnapshot.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\RngDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\SyncDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\SyncPrint.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\AresChecksummer.h" />
     <!-- Utilities -->
     <ClInclude Include="$(ThisDir)\src\Utilities\Debug.h" />
     <ClInclude Include="$(ThisDir)\src\Utilities\DumperTypes.h" />
