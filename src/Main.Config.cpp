@@ -71,6 +71,7 @@ void MainConfig::LoadFromINIFile()
 		this->MissionDump          = pINI->ReadBool(pOptionsSection, "MISSIONDUMP", this->MissionDump);
 		this->MissionDumpMaxFrames = pINI->ReadInteger(pOptionsSection, "MISSIONDUMP.MaxFrames", this->MissionDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
+		this->HarnessQuitOnEnd     = pINI->ReadBool(pOptionsSection, "HARNESS.QuitOnEnd", this->HarnessQuitOnEnd);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
 		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
 	}
@@ -149,6 +150,9 @@ void MainConfig::ApplyStaticOptions()
 	// (Spawner/HarnessProbe.cpp). HARNESS.Dir names its working directory
 	// relative to the game dir. Off by default; strictly read-only, so it is
 	// safe to leave armed alongside the dump hooks.
+	//
+	// ⚠️ HARNESS.QuitOnEnd is the ONE exception to that read-only property: it
+	// makes the `end` verb exit the process. Arm it only for unattended rounds.
 	{
 		HarnessProbe::Enable = this->HarnessProbeEnabled;
 		if (HarnessProbe::Enable)
@@ -161,7 +165,9 @@ void MainConfig::ApplyStaticOptions()
 				std::strncpy(HarnessProbe::Dir, "HARNESS", HarnessProbe::MaxDirLen - 1);
 				HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
 			}
-			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only)\n", HarnessProbe::Dir);
+			HarnessProbe::QuitOnEnd = this->HarnessQuitOnEnd;
+			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only, quit-on-end=%d)\n",
+				HarnessProbe::Dir, HarnessProbe::QuitOnEnd ? 1 : 0);
 		}
 	}
 

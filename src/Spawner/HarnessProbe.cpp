@@ -22,6 +22,7 @@
 #include "HarnessOrders.h"
 #include "HarnessSnapshot.h"
 #include "CellDump.h"
+#include "SyncDump.h"
 
 #include <Helpers/Macro.h>
 #include <Utilities/Debug.h>
@@ -42,6 +43,7 @@
 #include <cstdint>
 
 bool HarnessProbe::Enable = false;
+bool HarnessProbe::QuitOnEnd = false;
 char HarnessProbe::Dir[HarnessProbe::MaxDirLen] = "HARNESS";
 int HarnessProbe::PinnedSeed = 0;
 
@@ -622,6 +624,18 @@ namespace
 						ended = true;
 						FlushObs();
 						WriteStatus(frame);
+
+						if (HarnessProbe::QuitOnEnd)
+						{
+							// Order matters: the ack and status are already on
+							// disk above, then the archive gets its epilogue,
+							// then std::exit flushes every remaining C stream.
+							// A TerminateProcess from outside reaches none of
+							// these three.
+							Debug::Log("[HarnessProbe] QuitOnEnd: finalising the sync dump and exiting at frame %d\n", frame);
+							SyncDump::Finish();
+							std::exit(0);
+						}
 					}
 				}
 				else

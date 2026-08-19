@@ -47,6 +47,7 @@ public:
 	bool MissionDump;
 	int MissionDumpMaxFrames;
 	bool HarnessProbeEnabled;
+	bool HarnessQuitOnEnd;
 	char HarnessDir[64];
 	int HarnessSeed;
 
@@ -93,6 +94,7 @@ public:
 		, MissionDump { false }
 		, MissionDumpMaxFrames { 0 }
 		, HarnessProbeEnabled { false }
+		, HarnessQuitOnEnd { false }
 		, HarnessDir { "HARNESS" }
 		, HarnessSeed { 0 }
 
