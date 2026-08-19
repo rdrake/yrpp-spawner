@@ -26,6 +26,10 @@
 #include <SessionClass.h>
 #include <TargetClass.h>
 #include <GeneralDefinitions.h>
+#include <InfantryTypeClass.h>
+#include <InfantryClass.h>
+#include <TechnoTypeClass.h>
+#include <MapClass.h>
 
 namespace
 {
@@ -116,6 +120,89 @@ const char* HarnessOrders::ResultReason(OrderResult result)
 	case OrderResult::QueueFull:       return "outlist-full";
 	case OrderResult::NoPlayerHouse:   return "no-player-house";
 	case OrderResult::BadCell:         return "bad-cell";
+	}
+	return "unknown";
+}
+
+SpawnResult HarnessOrders::Spawn(const char* typeName, int cellX, int cellY, unsigned int* outUid)
+{
+	if (!IsSinglePlayer())
+	{
+		Debug::Log("[HarnessOrders] Refusing spawn: GameMode=%d is not SP\n",
+			static_cast<int>(SessionClass::Instance.GameMode));
+		return SpawnResult::NotSinglePlayer;
+	}
+
+	if (cellX < 0 || cellY < 0)
+		return SpawnResult::BadCell;
+
+	HouseClass* pPlayer = HouseClass::CurrentPlayer;
+	if (!pPlayer)
+		return SpawnResult::NoPlayerHouse;
+
+	const CellStruct cell { static_cast<short>(cellX), static_cast<short>(cellY) };
+	if (!MapClass::Instance.CellExists(cell))
+		return SpawnResult::BadCell;
+
+	// INFANTRY ONLY (HarnessOrders.h). A name that resolves to some OTHER
+	// real TechnoTypeClass (a vehicle, aircraft, building ID) is a distinct,
+	// explicit rejection - never a silent attempt through an unpinned
+	// construction-time array.
+	InfantryTypeClass* pType = InfantryTypeClass::Find(typeName);
+	if (!pType)
+	{
+		if (TechnoTypeClass::Find(typeName))
+			return SpawnResult::UnsupportedType;
+		return SpawnResult::UnknownType;
+	}
+
+	// Allocation + the full construction chain: InfantryTypeClass::CreateObject
+	// (pinned 0x00523B10) -> InfantryClass ctor (0x00517A50) -> FootClass
+	// (0x004D31E0) -> TechnoClass (0x006F2B40), which writes Owner (+0x21C) and
+	// appends unconditionally to the three construction-time arrays before
+	// this call returns (object-creation-teardown.md Sec.1, Sec.3). No
+	// rollback needed on failure here - allocation failure leaves no trace
+	// (same note, the table's first row).
+	ObjectClass* pObj = pType->CreateObject(pPlayer);
+	if (!pObj)
+		return SpawnResult::AllocationFailed;
+
+	TechnoClass* pTechno = static_cast<TechnoClass*>(pObj);
+
+	const CoordStruct coord = CellClass::Cell2Coord(cell);
+	if (!pTechno->Unlimbo(coord, DirType::North))
+	{
+		// Constructed but never placed. Left alone, this stays in the
+		// construction-time arrays "forever" (object-creation-teardown.md
+		// Sec.7) - an orphan. Limbo() before delete is the note's Sec.6
+		// terminal-outcome rule: a documented safe no-op on an object that
+		// was never unlimboed (specs/ObjectClass__Limbo_0x005f4d30.md Sec.4
+		// step 1), called unconditionally because the destructor chain was
+		// not confirmed to call it on its own.
+		pTechno->Limbo();
+		delete pTechno;
+		return SpawnResult::PlacementRejected;
+	}
+
+	// Success. UniqueID was assigned during construction (AbstractClass'
+	// base ctor, reached from the TechnoClass ctor tail), so it is already
+	// valid here - this is the harness's label binding (HarnessOrders.h).
+	*outUid = pTechno->UniqueID;
+	return SpawnResult::Ok;
+}
+
+const char* HarnessOrders::ResultReason(SpawnResult result)
+{
+	switch (result)
+	{
+	case SpawnResult::Ok:                return "spawned";
+	case SpawnResult::NotSinglePlayer:   return "not-single-player";
+	case SpawnResult::NoPlayerHouse:     return "no-player-house";
+	case SpawnResult::BadCell:           return "bad-cell";
+	case SpawnResult::UnknownType:       return "unknown-type";
+	case SpawnResult::UnsupportedType:   return "unsupported-type";
+	case SpawnResult::AllocationFailed:  return "allocation-failed";
+	case SpawnResult::PlacementRejected: return "placement-rejected";
 	}
 	return "unknown";
 }

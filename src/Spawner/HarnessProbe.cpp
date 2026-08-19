@@ -22,6 +22,7 @@
 #include "HarnessOrders.h"
 #include "HarnessSnapshot.h"
 #include "CellDump.h"
+#include "SyncDump.h"
 
 #include <Helpers/Macro.h>
 #include <Utilities/Debug.h>
@@ -42,6 +43,7 @@
 #include <cstdint>
 
 bool HarnessProbe::Enable = false;
+bool HarnessProbe::QuitOnEnd = false;
 char HarnessProbe::Dir[HarnessProbe::MaxDirLen] = "HARNESS";
 int HarnessProbe::PinnedSeed = 0;
 
@@ -122,6 +124,9 @@ namespace
 	int lastConsumedId = 0;                 // see DuplicateWatch below
 	FILETIME lastConsumedWrite = { 0, 0 };
 	bool ended = false;
+	// Set by the `end` verb under HARNESS.QuitOnEnd; serviced one hook
+	// invocation later so the end frame lands in the archive first.
+	bool quitPending = false;
 	bool dirsCreated = false;
 
 	// Error/visibility counters. These are surfaced in status.txt rather than
@@ -554,6 +559,60 @@ namespace
 							HarnessOrders::ResultReason(result), requestedFrame, frame);
 					}
 				}
+				else if (std::strcmp(buf, "spawn") == 0)
+				{
+					// The second state-mutating verb, gated identically to
+					// move (single-player only - HarnessOrders.h). Every
+					// non-Ok outcome is a terminal `rejected`, matching
+					// move's convention: "the harness declined to act, and
+					// here is exactly why", never a crash and never a
+					// silent no-op that leaks the allocated object.
+					char typeBuf[64];
+					char argBuf[64];
+					int cellX = -1;
+					int cellY = -1;
+					bool argsOk = true;
+
+					if (!ReadKey(body, "type", typeBuf, sizeof(typeBuf)))
+						argsOk = false;
+
+					if (ReadKey(body, "x", argBuf, sizeof(argBuf)))
+						cellX = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "y", argBuf, sizeof(argBuf)))
+						cellY = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-spawn-args",
+							requestedFrame, frame);
+					}
+					else
+					{
+						unsigned int uid = 0;
+						const SpawnResult result = HarnessOrders::Spawn(typeBuf, cellX, cellY, &uid);
+						if (result == SpawnResult::Ok)
+						{
+							// The label-to-UID binding: the harness's own
+							// AbstractClass::UniqueID, never an array index
+							// (HarnessOrders.h) - embedded here so the host
+							// can bind whatever label it staged this command
+							// under to the real, stable identity.
+							char reason[64];
+							std::snprintf(reason, sizeof(reason), "spawned-uid=%u", uid);
+							acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+						}
+						else
+						{
+							acked = WriteAck(id, "rejected",
+								HarnessOrders::ResultReason(result), requestedFrame, frame);
+						}
+					}
+				}
 				else if (std::strcmp(buf, "fail-test") == 0)
 				{
 					// Exercises the fourth ack state so the controller's
@@ -568,6 +627,11 @@ namespace
 						ended = true;
 						FlushObs();
 						WriteStatus(frame);
+
+						// Armed, not executed here: the exit happens one hook
+						// invocation later so the end frame's own SYNC file is
+						// written first. See the quitPending block in PerFrame.
+						quitPending = HarnessProbe::QuitOnEnd;
 					}
 				}
 				else
@@ -760,6 +824,20 @@ void HarnessProbe::PerFrame()
 		WriteStatus(frame);
 		lastStatusFrame = frame;
 		lastStatusTick = nowTick;
+	}
+
+	// Deferred by exactly one invocation, and the delay is the point. SyncDump
+	// hooks the SAME dispatch point (0x55DDA0) and Syringe chains it AFTER this
+	// one, so quitting inside the `end` verb exits before the end frame's own
+	// SYNC file is written -- measured 2026-08-19, the archive stopped at 2399
+	// against a script that ends at 2400. Waiting one invocation lets that
+	// write land first.
+	if (quitPending)
+	{
+		Debug::Log("[HarnessProbe] QuitOnEnd: finalising the sync dump and exiting at frame %d\n", frame);
+		FlushObs();
+		SyncDump::Finish();
+		std::exit(0);
 	}
 
 	if (ended)

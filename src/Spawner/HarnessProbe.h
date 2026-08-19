@@ -67,6 +67,8 @@
 //                            frame=<n>         0 = as soon as possible
 //                            verb=<name>       noop | count-technos |
 //                                              fail-test | end
+//                          `end` additionally finalises the sync-dump archive
+//                          and exits the process when HARNESS.QuitOnEnd=yes.
 //                          Values may be padded with spaces/tabs; a value may
 //                          not itself contain a space.
 //   <dir>\acks.txt         append-only, one terminal ack per command:
@@ -127,6 +129,14 @@ public:
 	// "HARNESS"). DLL-owned fixed storage; never grows.
 	static constexpr int MaxDirLen = 64;
 	static char Dir[MaxDirLen];
+
+	// HARNESS.QuitOnEnd=yes - the `end` verb finalises the sync-dump archive
+	// and exits the process instead of leaving the game up. Needed for
+	// unattended rounds: killing the process from outside is a
+	// TerminateProcess, which loses the tar/zstd epilogue and every frame
+	// after the last periodic zstd frame. Off by default, so an interactive
+	// round still ends with a human quitting the game.
+	static bool QuitOnEnd;
 
 	// HARNESS.Seed, or 0 for "leave the engine's stock behaviour alone".
 	// Recorded here purely so the manifest can state whether a run's seed was

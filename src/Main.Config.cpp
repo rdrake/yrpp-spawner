@@ -18,10 +18,15 @@
 */
 
 #include "Main.Config.h"
+#include <Spawner/AnimDump.h>
 #include <Spawner/AstarDump.h>
 #include <Spawner/CellDump.h>
+#include <Spawner/DamageDump.h>
 #include <Spawner/HarnessProbe.h>
+#include <Spawner/MissionDump.h>
+#include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
+#include <Spawner/SyncPrint.h>
 #include <Utilities/Debug.h>
 #include <Utilities/Macro.h>
 
@@ -53,9 +58,20 @@ void MainConfig::LoadFromINIFile()
 		this->SyncDump             = pINI->ReadBool(pOptionsSection, "SYNCDUMP", this->SyncDump);
 		this->SyncDumpComputeCRC   = pINI->ReadBool(pOptionsSection, "SYNCDUMP.ComputeCRC", this->SyncDumpComputeCRC);
 		this->SyncDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.MaxFrames", this->SyncDumpMaxFrames);
+		this->SyncDumpArchive      = pINI->ReadBool(pOptionsSection, "SYNCDUMP.Archive", this->SyncDumpArchive);
+		this->SyncDumpArchiveLevel = pINI->ReadInteger(pOptionsSection, "SYNCDUMP.ArchiveLevel", this->SyncDumpArchiveLevel);
+		pINI->ReadString(pOptionsSection, "SYNCDUMP.FastPrint", this->SyncDumpFastPrint, this->SyncDumpFastPrint, sizeof(this->SyncDumpFastPrint));
 		pINI->ReadString(pOptionsSection, "ASTARDUMP", this->AstarDumpMode, this->AstarDumpMode, sizeof(this->AstarDumpMode));
 		pINI->ReadString(pOptionsSection, "CELLDUMP.Frames", this->CellDumpFrames, this->CellDumpFrames, sizeof(this->CellDumpFrames));
+		this->DamageDump           = pINI->ReadBool(pOptionsSection, "DAMAGEDUMP", this->DamageDump);
+		this->RngDump              = pINI->ReadBool(pOptionsSection, "RNGDUMP", this->RngDump);
+		this->RngDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "RNGDUMP.MaxFrames", this->RngDumpMaxFrames);
+		this->AnimDump             = pINI->ReadBool(pOptionsSection, "ANIMDUMP", this->AnimDump);
+		this->AnimDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "ANIMDUMP.MaxFrames", this->AnimDumpMaxFrames);
+		this->MissionDump          = pINI->ReadBool(pOptionsSection, "MISSIONDUMP", this->MissionDump);
+		this->MissionDumpMaxFrames = pINI->ReadInteger(pOptionsSection, "MISSIONDUMP.MaxFrames", this->MissionDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
+		this->HarnessQuitOnEnd     = pINI->ReadBool(pOptionsSection, "HARNESS.QuitOnEnd", this->HarnessQuitOnEnd);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
 		this->HarnessSeed          = pINI->ReadInteger(pOptionsSection, "HARNESS.Seed", this->HarnessSeed);
 	}
@@ -97,6 +113,19 @@ void MainConfig::ApplyStaticOptions()
 		SyncDump::Enable = true;
 		SyncDump::ComputeCRC = this->SyncDumpComputeCRC;
 		SyncDump::MaxFrames = this->SyncDumpMaxFrames;
+		SyncDump::Archive = this->SyncDumpArchive;
+		SyncDump::ArchiveLevel = this->SyncDumpArchiveLevel;
+
+		if (_stricmp(this->SyncDumpFastPrint, "yes") == 0)
+		{
+			SyncPrint::PrintMode = SyncPrint::Mode::Fast;
+			Debug::Log("[SyncPrint] Fast print armed\n");
+		}
+		else if (_stricmp(this->SyncDumpFastPrint, "verify") == 0)
+		{
+			SyncPrint::PrintMode = SyncPrint::Mode::Verify;
+			Debug::Log("[SyncPrint] Verify mode armed (sessions are not trace-valid)\n");
+		}
 	}
 
 	if (_stricmp(this->AstarDumpMode, "yes") == 0)
@@ -121,6 +150,9 @@ void MainConfig::ApplyStaticOptions()
 	// (Spawner/HarnessProbe.cpp). HARNESS.Dir names its working directory
 	// relative to the game dir. Off by default; strictly read-only, so it is
 	// safe to leave armed alongside the dump hooks.
+	//
+	// ⚠️ HARNESS.QuitOnEnd is the ONE exception to that read-only property: it
+	// makes the `end` verb exit the process. Arm it only for unattended rounds.
 	{
 		HarnessProbe::Enable = this->HarnessProbeEnabled;
 		if (HarnessProbe::Enable)
@@ -133,7 +165,9 @@ void MainConfig::ApplyStaticOptions()
 				std::strncpy(HarnessProbe::Dir, "HARNESS", HarnessProbe::MaxDirLen - 1);
 				HarnessProbe::Dir[HarnessProbe::MaxDirLen - 1] = '\0';
 			}
-			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only)\n", HarnessProbe::Dir);
+			HarnessProbe::QuitOnEnd = this->HarnessQuitOnEnd;
+			Debug::Log("[HarnessProbe] Armed (dir=%s, read-only, quit-on-end=%d)\n",
+				HarnessProbe::Dir, HarnessProbe::QuitOnEnd ? 1 : 0);
 		}
 	}
 
@@ -201,6 +235,45 @@ void MainConfig::ApplyStaticOptions()
 				CellDump::FrameCount, this->CellDumpFrames);
 		}
 	}
+
+	// DAMAGEDUMP=yes - trace every GetTotalDamage call (Spawner/DamageDump.cpp).
+	DamageDump::Enable = this->DamageDump;
+	if (DamageDump::Enable)
+		Debug::Log("[DamageDump] Armed\n");
+
+	// RNGDUMP=yes - record the caller EIP of every Randomizer draw, making draw
+	// ATTRIBUTION exact instead of inferred (Spawner/RngDump.cpp).
+	// RNGDUMP.MaxFrames=<n> stops appending past frame n; 0 (the default) means
+	// unlimited and lets RngDump::MaxRows be the only bound.
+	RngDump::Enable = this->RngDump;
+	RngDump::MaxFrames = this->RngDumpMaxFrames;
+	if (RngDump::Enable)
+		Debug::Log("[RngDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			RngDump::MaxFrames, RngDump::MaxRows);
+
+	// ANIMDUMP=yes - per-frame per-anim raw state (owner pointer, raw Location,
+	// limbo flag, stable instance identity), the observables the flame-detach
+	// question pre-registered and SYNCDUMP cannot record (Spawner/AnimDump.cpp).
+	// ANIMDUMP.MaxFrames=<n> stops appending past frame n; 0 (the default)
+	// means unlimited and lets AnimDump::MaxRows be the only bound.
+	AnimDump::Enable = this->AnimDump;
+	AnimDump::MaxFrames = this->AnimDumpMaxFrames;
+	if (AnimDump::Enable)
+		Debug::Log("[AnimDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			AnimDump::MaxFrames, AnimDump::MaxRows);
+
+	// MISSIONDUMP=yes - per-frame per-object mission state, including the two
+	// fields the Ares SYNCDUMP row does NOT print: the mission timer's raw
+	// remaining count (+0xD0) and MissionStatus (+0xBC). See
+	// Spawner/MissionDump.h for why this is a separate dump and not two more
+	// columns on the Ares row. MISSIONDUMP.MaxFrames=<n> stops appending past
+	// frame n; 0 (the default) means unlimited and lets MissionDump::MaxRows
+	// be the only bound.
+	MissionDump::Enable = this->MissionDump;
+	MissionDump::MaxFrames = this->MissionDumpMaxFrames;
+	if (MissionDump::Enable)
+		Debug::Log("[MissionDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
+			MissionDump::MaxFrames, MissionDump::MaxRows);
 
 	if (this->SingleProcAffinity)
 	{

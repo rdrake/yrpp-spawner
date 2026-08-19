@@ -38,6 +38,15 @@
 // (FUN_0056d430; clamped variant FUN_0056d3f0 clamps to
 // [0, ValidMapCellCount)).
 //
+// PLUS the per-cell lighting cache - the whole CellClass +0x104..+0x116 block
+// (Intensity, Ambient, Intensity_Normal, Intensity_Terrain, Color1_Blue,
+// Color2_Red/Green/Blue) and an interned LightConvert identity - against a
+// header block carrying ScenarioClass's ambient levels and all four lighting
+// profiles (Normal / Ion / Nuke / Dominator). Those two halves together are
+// what makes CellClass::UpdateCellLighting checkable: its inputs are the
+// scenario constants plus the cell's own Ambient/Level/Intensity, and its
+// outputs are three of the dumped columns.
+//
 // Read-only with respect to game state: iterates the cell grid via
 // MapClass::TryGetCellAt (a pure bounds-checked pointer-grid lookup - NOT the
 // stateful CellIterator, whose cursor fields live on MapClass) and reads

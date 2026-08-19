@@ -63,13 +63,52 @@
     <ClCompile Include="$(ThisDir)\src\Spawner\Spawner.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\Spawner.Hook.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\Statistics.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\AnimDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\MissionDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\AstarDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\CellDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\DamageDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessManifest.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessOrders.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessProbe.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\HarnessSnapshot.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\RngDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\SyncDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\SyncPrint.cpp" />
+    <!--
+      Cdecl, not the project's /Gz default: this TU includes zstd.h, and its
+      undecorated declarations must match zstd.c's definitions below. The
+      class's own methods are called from SyncDump.cpp, which is StdCall, so
+      they are pinned with TARZSTD_CALL in TarZstd.h, and a mismatch there
+      changes the decorated names and the linker catches it.
+    -->
+    <ClCompile Include="$(ThisDir)\src\Spawner\TarZstd.cpp">
+      <CallingConvention>Cdecl</CallingConvention>
+    </ClCompile>
+    <!--
+      zstd 1.5.7, single-file amalgamation (build/single_file_libs). Every
+      setting below overrides a project-wide default this C library cannot
+      build under, so none of them is decoration:
+        CompileAsC        - it is C; the project's stdcpp20 default rejects it.
+        CallingConvention - the project builds /Gz (StdCall); zstd is cdecl and
+                            its internal function pointers and CRT callbacks
+                            require it.
+        WarningLevel      - the project is Level4; third-party C is not ours to
+                            clean up and its warnings would bury ours.
+        ConformanceMode   - kept off, as elsewhere in this project.
+
+      Note there is deliberately NO ZSTDLIB_VISIBLE=__cdecl here. That was the
+      first attempt and MSVC rejects it: zstd.h writes `ZSTDLIB_API unsigned
+      ZSTD_versionNumber(void)`, so the macro lands BEFORE the return type,
+      which is C2062 / C4230. Matching conventions by compiling both TUs Cdecl
+      needs no macro at all.
+    -->
+    <ClCompile Include="$(ThisDir)\src\Spawner\ThirdParty\zstd\zstd.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
     <!-- Utilities -->
     <ClCompile Include="$(ThisDir)\src\Utilities\Debug.cpp" />
     <ClCompile Include="$(ThisDir)\src\Utilities\Patch.cpp" />
@@ -95,13 +134,19 @@
     <ClInclude Include="$(ThisDir)\src\Spawner\ProtocolZero.LatencyLevel.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.Config.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\AnimDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\MissionDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\AstarDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\CellDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\DamageDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessManifest.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessOrders.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessProbe.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\HarnessSnapshot.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\RngDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\SyncDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\SyncPrint.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\AresChecksummer.h" />
     <!-- Utilities -->
     <ClInclude Include="$(ThisDir)\src\Utilities\Debug.h" />
     <ClInclude Include="$(ThisDir)\src\Utilities\DumperTypes.h" />
