@@ -124,6 +124,9 @@ namespace
 	int lastConsumedId = 0;                 // see DuplicateWatch below
 	FILETIME lastConsumedWrite = { 0, 0 };
 	bool ended = false;
+	// Set by the `end` verb under HARNESS.QuitOnEnd; serviced one hook
+	// invocation later so the end frame lands in the archive first.
+	bool quitPending = false;
 	bool dirsCreated = false;
 
 	// Error/visibility counters. These are surfaced in status.txt rather than
@@ -625,17 +628,10 @@ namespace
 						FlushObs();
 						WriteStatus(frame);
 
-						if (HarnessProbe::QuitOnEnd)
-						{
-							// Order matters: the ack and status are already on
-							// disk above, then the archive gets its epilogue,
-							// then std::exit flushes every remaining C stream.
-							// A TerminateProcess from outside reaches none of
-							// these three.
-							Debug::Log("[HarnessProbe] QuitOnEnd: finalising the sync dump and exiting at frame %d\n", frame);
-							SyncDump::Finish();
-							std::exit(0);
-						}
+						// Armed, not executed here: the exit happens one hook
+						// invocation later so the end frame's own SYNC file is
+						// written first. See the quitPending block in PerFrame.
+						quitPending = HarnessProbe::QuitOnEnd;
 					}
 				}
 				else
@@ -828,6 +824,20 @@ void HarnessProbe::PerFrame()
 		WriteStatus(frame);
 		lastStatusFrame = frame;
 		lastStatusTick = nowTick;
+	}
+
+	// Deferred by exactly one invocation, and the delay is the point. SyncDump
+	// hooks the SAME dispatch point (0x55DDA0) and Syringe chains it AFTER this
+	// one, so quitting inside the `end` verb exits before the end frame's own
+	// SYNC file is written -- measured 2026-08-19, the archive stopped at 2399
+	// against a script that ends at 2400. Waiting one invocation lets that
+	// write land first.
+	if (quitPending)
+	{
+		Debug::Log("[HarnessProbe] QuitOnEnd: finalising the sync dump and exiting at frame %d\n", frame);
+		FlushObs();
+		SyncDump::Finish();
+		std::exit(0);
 	}
 
 	if (ended)
