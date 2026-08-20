@@ -11,8 +11,9 @@
 
 #pragma once
 
+#include <GeneralStructures.h>
+
 class ObjectClass;
-struct CoordStruct;
 
 class PlacementProbe
 {
