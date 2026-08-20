@@ -16,6 +16,7 @@
 
 #include <BuildingClass.h>
 #include <BuildingTypeClass.h>
+#include <FootClass.h>
 #include <ObjectClass.h>
 #include <Unsorted.h>
 
