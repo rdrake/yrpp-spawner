@@ -37,21 +37,6 @@ static_assert(offsetof(BuildingTypeClass, Foundation) == 0xEF0, "BuildingTypeCla
 namespace
 {
 	constexpr char OutputPath[] = "PLACEMENTPROBE.TXT";
-	constexpr DWORD ArithmeticFlagMask = 0x8D5;
-
-	DWORD GetAddFlags(DWORD value)
-	{
-		DWORD flags;
-		__asm
-		{
-			mov eax, value
-			add eax, 09Ch
-			pushfd
-			pop eax
-			mov flags, eax
-		}
-		return flags;
-	}
 }
 
 void PlacementProbe::Arm(bool enable)
@@ -145,17 +130,16 @@ void PlacementProbe::Record(ObjectClass* pObject, const CoordStruct* pCoord)
 	++RowCount;
 }
 
-DEFINE_HOOK(0x5F6940, ObjectClass_SetLocation_PlacementProbe, 0xA)
+DEFINE_HOOK(0x5F694A, ObjectClass_SetLocation_PlacementProbe, 0x7)
 {
-	const DWORD objectAddress = R->ECX();
-	auto* pObject = R->ECX<ObjectClass*>();
-	GET_STACK(CoordStruct*, pCoord, 0x4);
+	auto* pObject = reinterpret_cast<ObjectClass*>(
+		R->ECX() - static_cast<DWORD>(offsetof(ObjectClass, Location)));
+	auto* pCoord = R->EAX<const CoordStruct*>();
 	if (PlacementProbe::Enable)
 		PlacementProbe::Record(pObject, pCoord);
 
-	const DWORD addFlags = GetAddFlags(objectAddress);
-	R->EAX(reinterpret_cast<DWORD>(pCoord));
-	R->ECX(objectAddress + static_cast<DWORD>(offsetof(ObjectClass, Location)));
-	R->EFLAGS((R->EFLAGS() & ~ArithmeticFlagMask) | (addFlags & ArithmeticFlagMask));
+	auto* pLocation = R->ECX<CoordStruct*>();
+	pLocation->X = pCoord->X;
+	R->EDX(static_cast<DWORD>(pCoord->Y));
 	return 0;
 }
