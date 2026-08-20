@@ -44,6 +44,7 @@ public:
 	int RngDumpMaxFrames;
 	bool AnimDump;
 	int AnimDumpMaxFrames;
+	bool PlacementProbeEnabled;
 	bool MissionDump;
 	int MissionDumpMaxFrames;
 	bool HarnessProbeEnabled;
@@ -91,6 +92,7 @@ public:
 		, RngDumpMaxFrames { 0 }
 		, AnimDump { false }
 		, AnimDumpMaxFrames { 0 }
+		, PlacementProbeEnabled { false }
 		, MissionDump { false }
 		, MissionDumpMaxFrames { 0 }
 		, HarnessProbeEnabled { false }
