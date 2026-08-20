@@ -132,11 +132,12 @@ void PlacementProbe::Record(ObjectClass* pObject, const CoordStruct* pCoord)
 
 DEFINE_HOOK(0x5F6940, ObjectClass_SetLocation_PlacementProbe, 0xA)
 {
-	if (!PlacementProbe::Enable)
-		return 0;
-
 	auto* pObject = R->ECX<ObjectClass*>();
 	GET_STACK(CoordStruct*, pCoord, 0x4);
-	PlacementProbe::Record(pObject, pCoord);
+	if (PlacementProbe::Enable)
+		PlacementProbe::Record(pObject, pCoord);
+
+	R->EAX(reinterpret_cast<DWORD>(pCoord));
+	R->ECX(reinterpret_cast<DWORD>(&pObject->Location));
 	return 0;
 }
