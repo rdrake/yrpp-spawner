@@ -137,7 +137,5 @@ DEFINE_HOOK(0x5F6940, ObjectClass_SetLocation_PlacementProbe, 0xA)
 	if (PlacementProbe::Enable)
 		PlacementProbe::Record(pObject, pCoord);
 
-	R->EAX(reinterpret_cast<DWORD>(pCoord));
-	R->ECX(reinterpret_cast<DWORD>(&pObject->Location));
-	return 0;
+	return 0x5F6940;
 }
