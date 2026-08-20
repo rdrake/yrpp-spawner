@@ -1,0 +1,31 @@
+/**
+*  yrpp-spawner
+*
+*  Copyright(C) 2026-present CnCNet
+*
+*  This program is free software: you can redistribute it and/or modify
+*  it under the terms of the GNU General Public License as published by
+*  the Free Software Foundation, either version 3 of the License, or
+*  (at your option) any later version.
+*/
+
+#pragma once
+
+#include <GeneralStructures.h>
+
+class ObjectClass;
+class BuildingTypeClass;
+
+class PlacementProbe
+{
+public:
+	static bool Enable;
+	static int RowCount;
+	static int IniRowCount;
+	static constexpr int MaxRows = 16;
+	static constexpr int MaxIniRows = 8;
+
+	static void Arm(bool enable);
+	static void Record(ObjectClass* pObject, const CoordStruct* pCoord);
+	static void RecordIni(BuildingTypeClass* pType);
+};

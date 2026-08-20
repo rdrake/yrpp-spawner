@@ -24,6 +24,7 @@
 #include <Spawner/DamageDump.h>
 #include <Spawner/HarnessProbe.h>
 #include <Spawner/MissionDump.h>
+#include <Spawner/PlacementProbe.h>
 #include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
 #include <Spawner/SyncPrint.h>
@@ -68,6 +69,7 @@ void MainConfig::LoadFromINIFile()
 		this->RngDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "RNGDUMP.MaxFrames", this->RngDumpMaxFrames);
 		this->AnimDump             = pINI->ReadBool(pOptionsSection, "ANIMDUMP", this->AnimDump);
 		this->AnimDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "ANIMDUMP.MaxFrames", this->AnimDumpMaxFrames);
+		this->PlacementProbeEnabled  = pINI->ReadBool(pOptionsSection, "PLACEMENTPROBE", this->PlacementProbeEnabled);
 		this->MissionDump          = pINI->ReadBool(pOptionsSection, "MISSIONDUMP", this->MissionDump);
 		this->MissionDumpMaxFrames = pINI->ReadInteger(pOptionsSection, "MISSIONDUMP.MaxFrames", this->MissionDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
@@ -261,6 +263,10 @@ void MainConfig::ApplyStaticOptions()
 	if (AnimDump::Enable)
 		Debug::Log("[AnimDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
 			AnimDump::MaxFrames, AnimDump::MaxRows);
+
+	PlacementProbe::Arm(this->PlacementProbeEnabled);
+	if (PlacementProbe::Enable)
+		Debug::Log("[PlacementProbe] Armed (MaxRows=%d)\n", PlacementProbe::MaxRows);
 
 	// MISSIONDUMP=yes - per-frame per-object mission state, including the two
 	// fields the Ares SYNCDUMP row does NOT print: the mission timer's raw
