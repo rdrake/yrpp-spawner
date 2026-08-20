@@ -264,7 +264,7 @@ void MainConfig::ApplyStaticOptions()
 		Debug::Log("[AnimDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
 			AnimDump::MaxFrames, AnimDump::MaxRows);
 
-	PlacementProbe::Enable = this->PlacementProbeEnabled;
+	PlacementProbe::Arm(this->PlacementProbeEnabled);
 	if (PlacementProbe::Enable)
 		Debug::Log("[PlacementProbe] Armed (MaxRows=%d)\n", PlacementProbe::MaxRows);
 

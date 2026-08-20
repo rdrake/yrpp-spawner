@@ -22,5 +22,6 @@ public:
 	static int RowCount;
 	static constexpr int MaxRows = 16;
 
+	static void Arm(bool enable);
 	static void Record(ObjectClass* pObject, const CoordStruct* pCoord);
 };

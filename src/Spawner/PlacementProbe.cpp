@@ -20,7 +20,9 @@
 #include <ObjectClass.h>
 #include <Unsorted.h>
 
+#include <cerrno>
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 
@@ -31,6 +33,48 @@ static_assert(offsetof(AbstractClass, UniqueID) == 0x10, "AbstractClass::UniqueI
 static_assert(offsetof(ObjectClass, Location) == 0x9C, "ObjectClass::Location moved");
 static_assert(offsetof(BuildingClass, Type) == 0x520, "BuildingClass::Type moved");
 static_assert(offsetof(BuildingTypeClass, Foundation) == 0xEF0, "BuildingTypeClass::Foundation moved");
+
+namespace
+{
+	constexpr char OutputPath[] = "PLACEMENTPROBE.TXT";
+}
+
+void PlacementProbe::Arm(bool enable)
+{
+	Enable = false;
+	RowCount = 0;
+	errno = 0;
+	if (std::remove(OutputPath) != 0 && errno != ENOENT)
+	{
+		Debug::Log("[PlacementProbe] Could not remove stale %s\n", OutputPath);
+		return;
+	}
+	if (!enable)
+		return;
+
+	FILE* pFile = std::fopen(OutputPath, "wt");
+	if (!pFile)
+	{
+		Debug::Log("[PlacementProbe] Could not create %s\n", OutputPath);
+		return;
+	}
+
+	const int headerResult = std::fprintf(pFile, "PLACEMENTPROBE=1\n");
+	const int columnsResult = std::fprintf(pFile,
+		"COLUMNS=frame,object,uid,type,input_x,input_y,input_z,previous_x,previous_y,previous_z,foundation,width,height\n");
+	const int streamError = std::ferror(pFile);
+	const int closeResult = std::fclose(pFile);
+	if (headerResult < 0 || columnsResult < 0 || streamError != 0 || closeResult != 0)
+	{
+		errno = 0;
+		if (std::remove(OutputPath) != 0 && errno != ENOENT)
+			Debug::Log("[PlacementProbe] Could not remove failed %s\n", OutputPath);
+		Debug::Log("[PlacementProbe] Could not initialize %s\n", OutputPath);
+		return;
+	}
+
+	Enable = true;
+}
 
 void PlacementProbe::Record(ObjectClass* pObject, const CoordStruct* pCoord)
 {
@@ -51,9 +95,16 @@ void PlacementProbe::Record(ObjectClass* pObject, const CoordStruct* pCoord)
 		return;
 	}
 
-	Debug::Log(
-		"[PlacementProbe] frame=%d object=%08X uid=%u type=%.24s "
-		"input=%d,%d,%d previous=%d,%d,%d foundation=%d width=%d height=%d\n",
+	FILE* pFile = std::fopen(OutputPath, "at");
+	if (!pFile)
+	{
+		Enable = false;
+		Debug::Log("[PlacementProbe] Could not append to %s\n", OutputPath);
+		return;
+	}
+
+	const int writeResult = std::fprintf(pFile,
+		"R=%d,%08X,%u,%.24s,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
 		Unsorted::CurrentFrame,
 		static_cast<unsigned int>(reinterpret_cast<uintptr_t>(pObject)),
 		static_cast<unsigned int>(pObject->UniqueID),
@@ -67,6 +118,15 @@ void PlacementProbe::Record(ObjectClass* pObject, const CoordStruct* pCoord)
 		static_cast<int>(pType->Foundation),
 		static_cast<int>(pType->GetFoundationWidth()),
 		static_cast<int>(pType->GetFoundationHeight(false)));
+	const int streamError = std::ferror(pFile);
+	const int closeResult = std::fclose(pFile);
+	if (writeResult < 0 || streamError != 0 || closeResult != 0)
+	{
+		Enable = false;
+		Debug::Log("[PlacementProbe] Could not persist a row to %s\n", OutputPath);
+		return;
+	}
+
 	++RowCount;
 }
 
