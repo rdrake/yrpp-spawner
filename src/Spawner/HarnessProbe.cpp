@@ -613,6 +613,48 @@ namespace
 						}
 					}
 				}
+				else if (std::strcmp(buf, "attack") == 0)
+				{
+					// The third state-mutating verb, gated identically to move
+					// and spawn (single-player only - HarnessOrders.h). Same
+					// convention: every non-Ok outcome is a terminal
+					// `rejected`, never `failed`.
+					//
+					// The `executed` status here means the HARNESS executed the
+					// verb - it queued a MegaMission - exactly as it does for
+					// move. It does NOT mean the attacker fired. The reason
+					// token says which: `attack-queued`. AttackReason, not
+					// ResultReason, because the two verbs share OrderResult and
+					// differ on Ok, where ResultReason would say `move-queued`.
+					char argBuf[64];
+
+					unsigned int uid = 0;
+					unsigned int targetUid = 0;
+					bool argsOk = true;
+
+					if (ReadKey(body, "uid", argBuf, sizeof(argBuf)))
+						uid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "target", argBuf, sizeof(argBuf)))
+						targetUid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-attack-args",
+							requestedFrame, frame);
+					}
+					else
+					{
+						const OrderResult result = HarnessOrders::Attack(uid, targetUid);
+						acked = WriteAck(id,
+							result == OrderResult::Ok ? "executed" : "rejected",
+							HarnessOrders::AttackReason(result), requestedFrame, frame);
+					}
+				}
 				else if (std::strcmp(buf, "fail-test") == 0)
 				{
 					// Exercises the fourth ack state so the controller's
