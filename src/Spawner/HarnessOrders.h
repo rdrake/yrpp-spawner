@@ -57,6 +57,16 @@ enum class OrderResult
 	QueueFull,
 	NoPlayerHouse,
 	BadCell,
+	// Phase 3 (`attack`) only. `Attack` resolves TWO handles, so one shared
+	// `TargetExpired` would make the two misses indistinguishable and leave a
+	// failed capture undiagnosable without guessing which uid was stale
+	// (design section 3.1 requires them distinguishable).
+	AttackerExpired,
+	// Phase 3 only. `attack <uid> <uid>`: an object cannot attack itself, so
+	// this is a script error the harness can see BEFORE queueing. Queueing it
+	// would earn an `attack-queued` ack for an event the engine discards - the
+	// one overclaiming ack that is cheap to prevent from this side.
+	SelfTarget,
 };
 
 // Phase 2: `spawn`, the harness's second state-mutating verb, and the first
@@ -111,8 +121,32 @@ public:
 	// AbstractClass::UniqueID - the harness's label binding for it.
 	static SpawnResult Spawn(const char* typeName, int cellX, int cellY, unsigned int* outUid);
 
+	// Order the techno identified by `uid` to attack the techno identified by
+	// `targetUid`. Structurally `Move` with two of the six MegaMission fields
+	// swapped (design section 3.1): Mission::Attack instead of Mission::Move,
+	// the resolved target in the `target` slot instead of a cell in `dest`.
+	// Every one of Move's four hazards above applies unchanged and is handled
+	// by the same code.
+	//
+	// ACK IS NOT EXECUTION. A successful return means EventClass::OutList.Add
+	// accepted a MegaMission event and NOTHING MORE. The engine may still
+	// refuse the mission after the event pops - a neutral-owned target is the
+	// known case, and EventType::AreaAttack shows the engine draws
+	// distinctions this path does not model. The success token is therefore
+	// `attack-queued`, never `attack-executed`; whether the attacker actually
+	// fired must be read from a channel that observes the game (a snapshot,
+	// DAMAGEDUMP, or the sync dump), never from this ack.
+	static OrderResult Attack(unsigned int uid, unsigned int targetUid);
+
 	// Ack `reason` token for a result. Never contains a space - the host parses
 	// ack lines as whitespace-separated KEY=value tokens.
 	static const char* ResultReason(OrderResult result);
 	static const char* ResultReason(SpawnResult result);
+
+	// Ack `reason` for an Attack result. A separate entry point rather than an
+	// overload because the two verbs share OrderResult and differ ONLY on Ok:
+	// ResultReason(Ok) is `move-queued`, which would be a false ack for an
+	// attack. Every non-Ok arm delegates, so a new rejection reason is added
+	// in exactly one place.
+	static const char* AttackReason(OrderResult result);
 };

@@ -53,8 +53,16 @@
 //   * MissionClass::MissionAccumulateTime    [this+0xC4]
 //   * MissionClass::UpdateTimer.StartTime    [this+0xC8]
 //   * MissionClass::UpdateTimer.TimeLeft     [this+0xD0]  <- the ask
+//   * InfantryClass::SequenceAnim            [this+0x6C4] (infantry rows only)
+//   * TechnoClass::TargetingTimer.StartTime  [this+0x180]
+//   * TechnoClass::TargetingTimer.TimeLeft   [this+0x188]
 //
-// The timer pair is the RAW STORED fields, deliberately NOT
+// TargetingTimer is a SECOND, unrelated timer: UpdateTimer is the mission
+// dispatcher's, TargetingTimer is the one TargetAndEstimateDamage re-arms with
+// its RandomRanged(0, 2) draw. Nothing had ever observed it, so the draws it
+// gates have no per-object schedule on any banked capture.
+//
+// Both timer pairs are the RAW STORED fields, deliberately NOT
 // TimerStruct::GetTimeLeft(), which subtracts elapsed frames and returns a
 // DERIVED remaining count. The dispatcher writes the raw field and the raw
 // field is the entire point; a derived value would silently answer a
