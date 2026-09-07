@@ -27,6 +27,7 @@
 #include <FootClass.h>
 #include <InfantryClass.h>
 #include <MissionClass.h>
+#include <TechnoClass.h>
 #include <UnitClass.h>
 #include <Unsorted.h>
 
@@ -69,6 +70,11 @@ static_assert(offsetof(CDTimerClass, TimeLeft) == 0x8, "CDTimerClass::TimeLeft m
 // and no dump carried it; reference/yrpp_struct_fields.csv row
 // "InfantryClass,1732,SequenceAnim,enum,Sequence" is 0x6C4.
 static_assert(offsetof(InfantryClass, SequenceAnim) == 0x6C4, "InfantryClass::SequenceAnim moved");
+// The TARGETING timer, and it is NOT UpdateTimer above: UpdateTimer is the
+// mission dispatch timer. This is the one TechnoClass::TargetAndEstimateDamage
+// re-arms with its RandomRanged(0, 2) draw, and no dump has ever carried it -
+// which is why 251 draws on the twinkle capture have no per-object schedule.
+static_assert(offsetof(TechnoClass, TargetingTimer) == 0x180, "TechnoClass::TargetingTimer moved");
 
 namespace
 {
@@ -139,15 +145,18 @@ namespace
 		// GetTimeLeft() - see the header comment.
 		// sequence is off InfantryClass, not MissionClass, so it is -1 on every
 		// U/A/B row - see SequenceOf.
+		// targeting_start/targeting_left are the SECOND TimerStruct pair, off
+		// TechnoClass +0x180 - a different timer from timer_start/time_left.
 		std::fprintf(pFile,
 			"OFFSETS=mission:AC,suspended:B0,queued:B4,status:BC,startframe:C0,accum:C4,"
-			"timer_start:C8,time_left:D0,uid:10,sequence:6C4\n");
+			"timer_start:C8,time_left:D0,uid:10,sequence:6C4,"
+			"targeting_start:180,targeting_left:188\n");
 		// cat is I/U/A/B and idx is the object's position in that category's
 		// engine array - the same ordinal Ares prints as #NNNNN. A within-frame
 		// key only; ptr/uid are the cross-frame identity.
 		std::fprintf(pFile,
 			"COLUMNS.M=frame,cat,idx,ptr,uid,mission,queued,suspended,status,startframe,accum,"
-			"timer_start,time_left,sequence\n");
+			"timer_start,time_left,sequence,targeting_start,targeting_left\n");
 		std::fprintf(pFile, "COLUMNS.F=frame,infantry,units,aircraft,buildings\n");
 		Debug::Log("[MissionDump] Opened %s\n", path);
 		return true;
@@ -196,13 +205,14 @@ namespace
 	int SequenceOf(const BuildingClass*) { return -1; }
 
 	// One object's row. Every read here is a plain field load off the
-	// MissionClass sub-object; `pObj` is a TechnoClass-family pointer, and
-	// MissionClass is an unambiguous single-inheritance base of all four
-	// categories (mdisp 0), so the upcast is a no-op. `sequence` is the one
-	// exception and is resolved by the caller.
-	void EmitRow(int frame, char cat, int idx, const MissionClass* pObj, int sequence)
+	// TechnoClass sub-object; `pObj` is a TechnoClass-family pointer, and
+	// TechnoClass (like the MissionClass this used to take, its own base) is an
+	// unambiguous single-inheritance base of all four categories (mdisp 0), so
+	// the upcast is a no-op and the `ptr` column is the same address as before.
+	// `sequence` is the one exception and is resolved by the caller.
+	void EmitRow(int frame, char cat, int idx, const TechnoClass* pObj, int sequence)
 	{
-		std::fprintf(pFile, "M=%d,%c,%d,%08X,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+		std::fprintf(pFile, "M=%d,%c,%d,%08X,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
 			frame,
 			cat,
 			idx,
@@ -216,7 +226,9 @@ namespace
 			pObj->MissionAccumulateTime,
 			pObj->UpdateTimer.StartTime,
 			pObj->UpdateTimer.TimeLeft,
-			sequence);
+			sequence,
+			pObj->TargetingTimer.StartTime,
+			pObj->TargetingTimer.TimeLeft);
 
 		++MissionDump::RowCount;
 		if (++sinceFlush >= FlushEvery)

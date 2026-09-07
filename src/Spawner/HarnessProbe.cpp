@@ -34,6 +34,10 @@
 // other TechnoClass consumers use (src/Misc/Bugfixes.OpenTopCloak.cpp).
 #include <FootClass.h>
 #include <Unsorted.h>
+#include <HouseClass.h>
+#include <MapClass.h>
+#include <TacticalClass.h>
+#include <Surface.h>
 
 #include <Windows.h>
 #include <intrin.h>
@@ -249,6 +253,92 @@ namespace
 			if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING))
 				++statusWriteFailures;
 		}
+	}
+
+	// What one `screenshot` verb learned about the engine's own surface. Every
+	// field is READ BACK from the surface the pixels came from, never from the
+	// ini that requested it -- RA2MD.ini's ScreenWidth is a request and the
+	// engine is free to clamp it, so a capture campaign sized off the ini and
+	// not off this is sized off a number nothing confirmed.
+	struct ShotInfo
+	{
+		int Width;
+		int Height;
+		int Bpp;
+		int Stride;
+		int ViewX, ViewY, ViewW, ViewH;
+		int TacX, TacY;
+	};
+
+	// Dump DSurface::Composite to <Dir>\shots\<session>-<frame>-<id>.rsh.
+	//
+	// The file is a one-line ASCII header then rows of raw pixels, row-compacted
+	// to Width*Bpp so the reader never has to know the surface's padding.
+	bool WriteShot(int sessionId, int frame, int id, ShotInfo& out)
+	{
+		std::memset(&out, 0, sizeof(out));
+
+		DSurface* pSurface = DSurface::Composite;
+		if (!pSurface)
+			return false;
+
+		out.Width = pSurface->GetWidth();
+		out.Height = pSurface->GetHeight();
+		out.Bpp = pSurface->GetBytesPerPixel();
+		out.ViewX = DSurface::ViewBounds.X;
+		out.ViewY = DSurface::ViewBounds.Y;
+		out.ViewW = DSurface::ViewBounds.Width;
+		out.ViewH = DSurface::ViewBounds.Height;
+
+		if (TacticalClass::Instance)
+		{
+			out.TacX = TacticalClass::Instance->TacticalPos.X;
+			out.TacY = TacticalClass::Instance->TacticalPos.Y;
+		}
+
+		if (out.Width <= 0 || out.Height <= 0 || out.Bpp <= 0)
+			return false;
+
+		char dirPath[MAX_PATH];
+		std::snprintf(dirPath, sizeof(dirPath), "%s\\shots", HarnessProbe::Dir);
+		CreateDirectoryA(dirPath, nullptr);
+
+		auto* pBits = static_cast<const unsigned char*>(pSurface->Lock(0, 0));
+		if (!pBits)
+			return false;
+
+		// GetPitch is documented as bytes per scanline, but the engine's own
+		// surfaces report the PADDING on some paths. Both conventions are
+		// accepted by the only rule that separates them, and the branch taken is
+		// written into the header so the reader is never guessing.
+		const int pitch = pSurface->GetPitch();
+		const int rowBytes = out.Width * out.Bpp;
+		out.Stride = (pitch >= rowBytes) ? pitch : (rowBytes + pitch);
+
+		char path[MAX_PATH];
+		std::snprintf(path, sizeof(path), "%s\\%d-%d-%d.rsh", dirPath, sessionId, frame, id);
+
+		FILE* pFile = std::fopen(path, "wb");
+		if (!pFile)
+		{
+			pSurface->Unlock();
+			return false;
+		}
+
+		std::fprintf(pFile,
+			"RSHOT1 w=%d h=%d bpp=%d stride=%d pitch=%d view=%d,%d,%d,%d tac=%d,%d frame=%d session=%d\n",
+			out.Width, out.Height, out.Bpp, out.Stride, pitch,
+			out.ViewX, out.ViewY, out.ViewW, out.ViewH,
+			out.TacX, out.TacY, frame, sessionId);
+
+		bool ok = true;
+		for (int y = 0; y < out.Height && ok; ++y)
+			ok = std::fwrite(pBits + static_cast<size_t>(y) * out.Stride, 1, rowBytes, pFile)
+				== static_cast<size_t>(rowBytes);
+
+		std::fclose(pFile);
+		pSurface->Unlock();
+		return ok;
 	}
 
 	// Returns false when the ack could not be written. The caller MUST then
@@ -612,6 +702,137 @@ namespace
 								HarnessOrders::ResultReason(result), requestedFrame, frame);
 						}
 					}
+				}
+				else if (std::strcmp(buf, "attack") == 0)
+				{
+					// The third state-mutating verb, gated identically to move
+					// and spawn (single-player only - HarnessOrders.h). Same
+					// convention: every non-Ok outcome is a terminal
+					// `rejected`, never `failed`.
+					//
+					// The `executed` status here means the HARNESS executed the
+					// verb - it queued a MegaMission - exactly as it does for
+					// move. It does NOT mean the attacker fired. The reason
+					// token says which: `attack-queued`. AttackReason, not
+					// ResultReason, because the two verbs share OrderResult and
+					// differ on Ok, where ResultReason would say `move-queued`.
+					char argBuf[64];
+
+					unsigned int uid = 0;
+					unsigned int targetUid = 0;
+					bool argsOk = true;
+
+					if (ReadKey(body, "uid", argBuf, sizeof(argBuf)))
+						uid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "target", argBuf, sizeof(argBuf)))
+						targetUid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-attack-args",
+							requestedFrame, frame);
+					}
+					else
+					{
+						const OrderResult result = HarnessOrders::Attack(uid, targetUid);
+						acked = WriteAck(id,
+							result == OrderResult::Ok ? "executed" : "rejected",
+							HarnessOrders::AttackReason(result), requestedFrame, frame);
+					}
+				}
+				else if (std::strcmp(buf, "reveal") == 0)
+				{
+					// MapClass::Reveal @ 0x00577D90 EARLY-OUTS when the current
+					// house's Visionary (+0x240) is already set, and it returns
+					// without acting for any house that is not the current one.
+					// Both make a silent no-op indistinguishable from a reveal,
+					// so the flag is read either side and the transition is what
+					// the ack reports -- an unrevealed capture registers badly
+					// and reads as a stitcher fault.
+					HouseClass* pHouse = HouseClass::CurrentPlayer;
+					if (!pHouse)
+					{
+						acked = WriteAck(id, "rejected", "no-current-player",
+							requestedFrame, frame);
+					}
+					else
+					{
+						const bool wasVisionary = pHouse->Visionary != 0;
+						MapClass::Instance.Reveal(pHouse);
+						const bool nowVisionary = pHouse->Visionary != 0;
+
+						char reason[64];
+						std::snprintf(reason, sizeof(reason), "visionary=%d-to-%d",
+							wasVisionary ? 1 : 0, nowVisionary ? 1 : 0);
+						acked = WriteAck(id, nowVisionary ? "executed" : "failed",
+							reason, requestedFrame, frame);
+					}
+				}
+				else if (std::strcmp(buf, "view") == 0)
+				{
+					// Args are CELL coordinates; the ack carries the pixel-space
+					// TacticalPos the engine actually settled on. The driver
+					// asks in cells and the stitcher reads back pixels, so
+					// nothing has to re-derive the engine's own projection.
+					char argBuf[64];
+					int cellX = -1;
+					int cellY = -1;
+					bool argsOk = true;
+
+					if (ReadKey(body, "x", argBuf, sizeof(argBuf)))
+						cellX = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "y", argBuf, sizeof(argBuf)))
+						cellY = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-view-args",
+							requestedFrame, frame);
+					}
+					else if (!TacticalClass::Instance)
+					{
+						acked = WriteAck(id, "rejected", "no-tactical", requestedFrame, frame);
+					}
+					else
+					{
+						// Cell centre in leptons: 256 per cell, so +128 centres it.
+						CoordStruct coord { cellX * 256 + 128, cellY * 256 + 128, 0 };
+						TacticalClass::Instance->SetTacticalPosition(&coord);
+
+						char reason[64];
+						std::snprintf(reason, sizeof(reason), "tac=%d,%d",
+							TacticalClass::Instance->TacticalPos.X,
+							TacticalClass::Instance->TacticalPos.Y);
+						acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+					}
+				}
+				else if (std::strcmp(buf, "screenshot") == 0)
+				{
+					ShotInfo shot;
+					const bool written = WriteShot(sessionId, frame, id, shot);
+
+					// The surface's OWN width and height ride the ack whether the
+					// write worked or not: they are the only reading that says
+					// what resolution the engine settled on, and a failed write
+					// is exactly when that matters.
+					char reason[96];
+					std::snprintf(reason, sizeof(reason),
+						"surface=%dx%dx%d,stride=%d,view=%d,%d,%d,%d,tac=%d,%d",
+						shot.Width, shot.Height, shot.Bpp, shot.Stride,
+						shot.ViewX, shot.ViewY, shot.ViewW, shot.ViewH,
+						shot.TacX, shot.TacY);
+					acked = WriteAck(id, written ? "executed" : "failed", reason,
+						requestedFrame, frame);
 				}
 				else if (std::strcmp(buf, "fail-test") == 0)
 				{

@@ -120,8 +120,85 @@ const char* HarnessOrders::ResultReason(OrderResult result)
 	case OrderResult::QueueFull:       return "outlist-full";
 	case OrderResult::NoPlayerHouse:   return "no-player-house";
 	case OrderResult::BadCell:         return "bad-cell";
+	case OrderResult::AttackerExpired: return "attacker-expired";
+	case OrderResult::SelfTarget:      return "self-target";
 	}
 	return "unknown";
+}
+
+OrderResult HarnessOrders::Attack(unsigned int uid, unsigned int targetUid)
+{
+	if (!IsSinglePlayer())
+	{
+		Debug::Log("[HarnessOrders] Refusing attack: GameMode=%d is not SP\n",
+			static_cast<int>(SessionClass::Instance.GameMode));
+		return OrderResult::NotSinglePlayer;
+	}
+
+	// Checked before either lookup: with uid == targetUid both ResolveLive
+	// calls succeed and the miss arms below can never report it, so this
+	// would otherwise queue and earn an `attack-queued` ack.
+	if (uid == targetUid)
+		return OrderResult::SelfTarget;
+
+	HouseClass* pPlayer = HouseClass::CurrentPlayer;
+	if (!pPlayer)
+		return OrderResult::NoPlayerHouse;
+
+	// Two resolutions, two distinct misses. ResolveLive tests the object's own
+	// liveness flags rather than lookup success, because RemoveAllInactive runs
+	// AFTER the dispatch hook (hazard 4 in HarnessOrders.h) - a dead object is
+	// still in TechnoClass::Array and still findable this frame.
+	TechnoClass* pAttacker = ResolveLive(uid);
+	if (!pAttacker)
+		return OrderResult::AttackerExpired;
+
+	TechnoClass* pTarget = ResolveLive(targetUid);
+	if (!pTarget)
+		return OrderResult::TargetExpired;
+
+	const TargetClass src { static_cast<AbstractClass*>(pAttacker) };
+	const TargetClass target { static_cast<AbstractClass*>(pTarget) };
+	const TargetClass none {};
+
+	// MegaMission: (house, src, mission, target, dest, follow). Against Move,
+	// exactly two fields move - Mission::Attack for Mission::Move, and the
+	// resolved target where Move put a cell in `dest`. `dest` is empty here:
+	// an attack names an object, not a destination.
+	//
+	// Issued for HouseClass::CurrentPlayer, never the attacker's own house:
+	// an event for a house not controlled at this machine never executes AND
+	// is never popped (hazard 3), so a mis-addressed attack would leak. That
+	// means an attacker the local player does not own will be refused by the
+	// engine after the event pops - see the ack caveat in HarnessOrders.h.
+	const EventClass event(
+		pPlayer->ArrayIndex,
+		src,
+		Mission::Attack,
+		target,
+		none,     // no destination cell
+		none);    // no follow-up
+
+	// Checked, never fire-and-forget - overflow is a silent drop (hazard 2).
+	if (!EventClass::OutList.Add(event))
+	{
+		Debug::Log("[HarnessOrders] OutList full; attack uid=%u -> uid=%u DROPPED\n",
+			uid, targetUid);
+		return OrderResult::QueueFull;
+	}
+
+	return OrderResult::Ok;
+}
+
+const char* HarnessOrders::AttackReason(OrderResult result)
+{
+	// `attack-queued`, not `attack-executed`: OutList.Add succeeded and that
+	// is the whole claim (HarnessOrders.h). Every other arm is shared with
+	// Move and delegates, so a rejection reason exists in exactly one place.
+	if (result == OrderResult::Ok)
+		return "attack-queued";
+
+	return ResultReason(result);
 }
 
 SpawnResult HarnessOrders::Spawn(const char* typeName, int cellX, int cellY, unsigned int* outUid)
