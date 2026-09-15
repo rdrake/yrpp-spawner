@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <GeneralDefinitions.h>
+
 // Phase 1: the harness's first state-mutating verb.
 //
 // `move` injects a MegaMission EventClass into EventClass::OutList - the engine's
@@ -137,6 +139,31 @@ public:
 	// fired must be read from a channel that observes the game (a snapshot,
 	// DAMAGEDUMP, or the sync dump), never from this ack.
 	static OrderResult Attack(unsigned int uid, unsigned int targetUid);
+
+	// Phase 4: the single-target EventClass family - Sell, Repair, Deploy,
+	// Idle, Scatter, PowerOn and PowerOff. One shape for all seven: Type at
+	// +0, HouseIndex at +2, Frame at +3 and a 5-byte TargetClass at +7 - what
+	// the engine's own 0x4C65E0 constructor writes (the .cpp says why that
+	// exact call is not made). EventClass::Execute's per-type arm re-resolves the target through
+	// TargetClass::As_Techno / As_Building and applies its own guards (Sell
+	// requires the event's house to own the object; PowerOn/PowerOff refuse
+	// unless the type has PowerDrain > 0 or Powered=yes, via GoOnline /
+	// GoOffline's own early-out), so exactly attack's rule holds: the ack says
+	// QUEUED, and whether anything happened is read from the sync dump.
+	//
+	// Every one of Move's four hazards applies unchanged and is handled by the
+	// same code path.
+	static OrderResult TargetEvent(unsigned int uid, EventType type);
+
+	// `damage <uid> <hp>`: NOT an event. Calls the object's own virtual
+	// ReceiveDamage with IgnoreDefenses set - so `hp` lands unmodified by
+	// armor, veterancy or the friendly-fire pre-pass - from the probe hook,
+	// which is where `spawn` constructs: after the frame's logic and before
+	// the checksum. Warhead is Rules->C4Warhead, attacker none, attacking
+	// house CurrentPlayer. On Ok, `*before` / `*after` receive Health read
+	// either side of the call; a kill reads `after` as 0 with the object still
+	// in TechnoClass::Array (hazard 4 - the reap has not run yet).
+	static OrderResult Damage(unsigned int uid, int hp, int* before, int* after);
 
 	// Ack `reason` token for a result. Never contains a space - the host parses
 	// ack lines as whitespace-separated KEY=value tokens.

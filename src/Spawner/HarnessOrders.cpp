@@ -30,6 +30,7 @@
 #include <InfantryClass.h>
 #include <TechnoTypeClass.h>
 #include <MapClass.h>
+#include <RulesClass.h>
 
 namespace
 {
@@ -199,6 +200,79 @@ const char* HarnessOrders::AttackReason(OrderResult result)
 		return "attack-queued";
 
 	return ResultReason(result);
+}
+
+OrderResult HarnessOrders::TargetEvent(unsigned int uid, EventType type)
+{
+	if (!IsSinglePlayer())
+	{
+		Debug::Log("[HarnessOrders] Refusing event type=%d: GameMode=%d is not SP\n",
+			static_cast<int>(type), static_cast<int>(SessionClass::Instance.GameMode));
+		return OrderResult::NotSinglePlayer;
+	}
+
+	HouseClass* pPlayer = HouseClass::CurrentPlayer;
+	if (!pPlayer)
+		return OrderResult::NoPlayerHouse;
+
+	TechnoClass* pTechno = ResolveLive(uid);
+	if (!pTechno)
+		return OrderResult::TargetExpired;
+
+	// The engine's own shape for these is the 0x4C65E0 constructor, (house,
+	// type, TargetClass by value); YRpp declares it as (int id, int rtti) and
+	// that overload is ambiguous against (int, const int&) for every argument
+	// type, so this is the (house, type) constructor at 0x4C66C0 - same Type,
+	// HouseIndex and Frame writes, payload untouched - followed by the one
+	// payload write 0x4C65E0 would have made. Every single-target arm keeps
+	// its TargetClass at +7, so Idle.Whom addresses all six.
+	//
+	// IsExecuted is set explicitly: neither constructor writes it, and
+	// Execute_DoList skips an event whose byte reads true.
+	EventClass event(pPlayer->ArrayIndex, type);
+	event.IsExecuted = false;
+	event.Idle.Whom = TargetClass { static_cast<AbstractClass*>(pTechno) };
+
+	// Checked, never fire-and-forget - overflow is a silent drop (hazard 2).
+	if (!EventClass::OutList.Add(event))
+	{
+		Debug::Log("[HarnessOrders] OutList full; event type=%d for uid=%u DROPPED\n",
+			static_cast<int>(type), uid);
+		return OrderResult::QueueFull;
+	}
+
+	return OrderResult::Ok;
+}
+
+OrderResult HarnessOrders::Damage(unsigned int uid, int hp, int* before, int* after)
+{
+	if (!IsSinglePlayer())
+	{
+		Debug::Log("[HarnessOrders] Refusing damage: GameMode=%d is not SP\n",
+			static_cast<int>(SessionClass::Instance.GameMode));
+		return OrderResult::NotSinglePlayer;
+	}
+
+	HouseClass* pPlayer = HouseClass::CurrentPlayer;
+	if (!pPlayer)
+		return OrderResult::NoPlayerHouse;
+
+	TechnoClass* pTechno = ResolveLive(uid);
+	if (!pTechno)
+		return OrderResult::TargetExpired;
+
+	*before = pTechno->Health;
+
+	// Virtual, so the class's own override runs (InfantryClass, BuildingClass
+	// and UnitClass each have one). IgnoreDefenses=true skips the armor and
+	// friendly-fire pre-pass (specs/ObjectClass__ReceiveDamage_0x00701900.md
+	// section 4.1), so `hp` is what the base clamps against Health.
+	int damage = hp;
+	pTechno->ReceiveDamage(&damage, 0, RulesClass::Instance->C4Warhead,
+		nullptr, true, false, pPlayer);
+
+	*after = pTechno->Health;
+	return OrderResult::Ok;
 }
 
 SpawnResult HarnessOrders::Spawn(const char* typeName, int cellX, int cellY, unsigned int* outUid)
