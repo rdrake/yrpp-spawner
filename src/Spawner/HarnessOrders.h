@@ -140,8 +140,8 @@ public:
 	// DAMAGEDUMP, or the sync dump), never from this ack.
 	static OrderResult Attack(unsigned int uid, unsigned int targetUid);
 
-	// `enter <uid> <target>`: Attack's MegaMission with Mission::Enter in the
-	// mission slot - what the engine queues for an infantry clicked onto an
+	// `enter <uid> <target>`: a MegaMission with Mission::Enter and the target in
+	// the DESTINATION slot - what the engine queues for an infantry clicked onto an
 	// occupiable building, a transport or a repair bay. Same ack rule: QUEUED
 	// only; whether it garrisoned is read from the sync dump (the infantry goes
 	// to limbo, the building's owner flips).

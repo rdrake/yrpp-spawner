@@ -182,12 +182,18 @@ OrderResult HarnessOrders::TargetMission(unsigned int uid, unsigned int targetUi
 	// is never popped (hazard 3), so a mis-addressed attack would leak. That
 	// means an attacker the local player does not own will be refused by the
 	// engine after the event pops - see the ack caveat in HarnessOrders.h.
+	//
+	// Enter carries the object in `dest` with no target, the way the click
+	// path queues ACTION_ENTER (RA1 GPL Active_Click_With: MISSION_ENTER,
+	// TARGET_NONE, object). In `target` the engine attacks it instead -
+	// measured 2026-09-24, harness-garrison-probe pass 1.
+	const bool enter = mission == Mission::Enter;
 	const EventClass event(
 		pPlayer->ArrayIndex,
 		src,
 		mission,
-		target,
-		none,     // no destination cell
+		enter ? none : target,
+		enter ? target : none,
 		none);    // no follow-up
 
 	// Checked, never fire-and-forget - overflow is a silent drop (hazard 2).
