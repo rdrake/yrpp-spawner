@@ -132,9 +132,9 @@ OrderResult HarnessOrders::Attack(unsigned int uid, unsigned int targetUid)
 	return TargetMission(uid, targetUid, Mission::Attack);
 }
 
-OrderResult HarnessOrders::Enter(unsigned int uid, unsigned int targetUid)
+OrderResult HarnessOrders::Capture(unsigned int uid, unsigned int targetUid)
 {
-	return TargetMission(uid, targetUid, Mission::Enter);
+	return TargetMission(uid, targetUid, Mission::Capture);
 }
 
 OrderResult HarnessOrders::TargetMission(unsigned int uid, unsigned int targetUid, Mission mission)
@@ -183,17 +183,16 @@ OrderResult HarnessOrders::TargetMission(unsigned int uid, unsigned int targetUi
 	// means an attacker the local player does not own will be refused by the
 	// engine after the event pops - see the ack caveat in HarnessOrders.h.
 	//
-	// Enter carries the object in `dest` with no target, the way the click
-	// path queues ACTION_ENTER (RA1 GPL Active_Click_With: MISSION_ENTER,
-	// TARGET_NONE, object). In `target` the engine attacks it instead -
-	// measured 2026-09-24, harness-garrison-probe pass 1.
-	const bool enter = mission == Mission::Enter;
+	// Capture carries the object in `dest` with no target, as the click arm
+	// does. In `target` the engine attacks it instead (measured 2026-09-24,
+	// ratwo harness-garrison-probe pass 1).
+	const bool toDest = mission == Mission::Capture;
 	const EventClass event(
 		pPlayer->ArrayIndex,
 		src,
 		mission,
-		enter ? none : target,
-		enter ? target : none,
+		toDest ? none : target,
+		toDest ? target : none,
 		none);    // no follow-up
 
 	// Checked, never fire-and-forget - overflow is a silent drop (hazard 2).
@@ -218,10 +217,10 @@ const char* HarnessOrders::AttackReason(OrderResult result)
 	return ResultReason(result);
 }
 
-const char* HarnessOrders::EnterReason(OrderResult result)
+const char* HarnessOrders::CaptureReason(OrderResult result)
 {
 	if (result == OrderResult::Ok)
-		return "enter-queued";
+		return "capture-queued";
 
 	return ResultReason(result);
 }

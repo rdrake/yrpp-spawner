@@ -736,12 +736,11 @@ namespace
 						}
 					}
 				}
-				else if (std::strcmp(buf, "attack") == 0 || std::strcmp(buf, "enter") == 0)
+				else if (std::strcmp(buf, "attack") == 0 || std::strcmp(buf, "capture") == 0)
 				{
-					// `enter` shares every line but the Mission: Enter where
-					// attack puts Attack, `enter-queued` where it acks
-					// `attack-queued`.
-					const bool enter = buf[0] == 'e';
+					// `capture` shares every line but the Mission (Capture, its
+					// object in dest) and the ack, `capture-queued`.
+					const bool capture = buf[0] == 'c';
 					// The third state-mutating verb, gated identically to move
 					// and spawn (single-player only - HarnessOrders.h). Same
 					// convention: every non-Ok outcome is a terminal
@@ -772,17 +771,17 @@ namespace
 					if (!argsOk)
 					{
 						acked = WriteAck(id, "rejected",
-							enter ? "missing-enter-args" : "missing-attack-args",
+							capture ? "missing-capture-args" : "missing-attack-args",
 							requestedFrame, frame);
 					}
 					else
 					{
-						const OrderResult result = enter
-							? HarnessOrders::Enter(uid, targetUid)
+						const OrderResult result = capture
+							? HarnessOrders::Capture(uid, targetUid)
 							: HarnessOrders::Attack(uid, targetUid);
 						acked = WriteAck(id,
 							result == OrderResult::Ok ? "executed" : "rejected",
-							enter ? HarnessOrders::EnterReason(result) : HarnessOrders::AttackReason(result),
+							capture ? HarnessOrders::CaptureReason(result) : HarnessOrders::AttackReason(result),
 							requestedFrame, frame);
 					}
 				}
