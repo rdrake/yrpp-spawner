@@ -736,8 +736,11 @@ namespace
 						}
 					}
 				}
-				else if (std::strcmp(buf, "attack") == 0)
+				else if (std::strcmp(buf, "attack") == 0 || std::strcmp(buf, "capture") == 0)
 				{
+					// `capture` shares every line but the Mission (Capture, its
+					// object in dest) and the ack, `capture-queued`.
+					const bool capture = buf[0] == 'c';
 					// The third state-mutating verb, gated identically to move
 					// and spawn (single-player only - HarnessOrders.h). Same
 					// convention: every non-Ok outcome is a terminal
@@ -767,15 +770,19 @@ namespace
 
 					if (!argsOk)
 					{
-						acked = WriteAck(id, "rejected", "missing-attack-args",
+						acked = WriteAck(id, "rejected",
+							capture ? "missing-capture-args" : "missing-attack-args",
 							requestedFrame, frame);
 					}
 					else
 					{
-						const OrderResult result = HarnessOrders::Attack(uid, targetUid);
+						const OrderResult result = capture
+							? HarnessOrders::Capture(uid, targetUid)
+							: HarnessOrders::Attack(uid, targetUid);
 						acked = WriteAck(id,
 							result == OrderResult::Ok ? "executed" : "rejected",
-							HarnessOrders::AttackReason(result), requestedFrame, frame);
+							capture ? HarnessOrders::CaptureReason(result) : HarnessOrders::AttackReason(result),
+							requestedFrame, frame);
 					}
 				}
 				else if (const TargetVerb* tv = FindTargetVerb(buf))
