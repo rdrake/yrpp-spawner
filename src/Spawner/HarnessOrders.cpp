@@ -129,10 +129,20 @@ const char* HarnessOrders::ResultReason(OrderResult result)
 
 OrderResult HarnessOrders::Attack(unsigned int uid, unsigned int targetUid)
 {
+	return TargetMission(uid, targetUid, Mission::Attack);
+}
+
+OrderResult HarnessOrders::Enter(unsigned int uid, unsigned int targetUid)
+{
+	return TargetMission(uid, targetUid, Mission::Enter);
+}
+
+OrderResult HarnessOrders::TargetMission(unsigned int uid, unsigned int targetUid, Mission mission)
+{
 	if (!IsSinglePlayer())
 	{
-		Debug::Log("[HarnessOrders] Refusing attack: GameMode=%d is not SP\n",
-			static_cast<int>(SessionClass::Instance.GameMode));
+		Debug::Log("[HarnessOrders] Refusing mission=%d: GameMode=%d is not SP\n",
+			static_cast<int>(mission), static_cast<int>(SessionClass::Instance.GameMode));
 		return OrderResult::NotSinglePlayer;
 	}
 
@@ -175,7 +185,7 @@ OrderResult HarnessOrders::Attack(unsigned int uid, unsigned int targetUid)
 	const EventClass event(
 		pPlayer->ArrayIndex,
 		src,
-		Mission::Attack,
+		mission,
 		target,
 		none,     // no destination cell
 		none);    // no follow-up
@@ -183,8 +193,8 @@ OrderResult HarnessOrders::Attack(unsigned int uid, unsigned int targetUid)
 	// Checked, never fire-and-forget - overflow is a silent drop (hazard 2).
 	if (!EventClass::OutList.Add(event))
 	{
-		Debug::Log("[HarnessOrders] OutList full; attack uid=%u -> uid=%u DROPPED\n",
-			uid, targetUid);
+		Debug::Log("[HarnessOrders] OutList full; mission=%d uid=%u -> uid=%u DROPPED\n",
+			static_cast<int>(mission), uid, targetUid);
 		return OrderResult::QueueFull;
 	}
 
@@ -198,6 +208,14 @@ const char* HarnessOrders::AttackReason(OrderResult result)
 	// Move and delegates, so a rejection reason exists in exactly one place.
 	if (result == OrderResult::Ok)
 		return "attack-queued";
+
+	return ResultReason(result);
+}
+
+const char* HarnessOrders::EnterReason(OrderResult result)
+{
+	if (result == OrderResult::Ok)
+		return "enter-queued";
 
 	return ResultReason(result);
 }

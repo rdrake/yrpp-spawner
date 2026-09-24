@@ -140,6 +140,13 @@ public:
 	// DAMAGEDUMP, or the sync dump), never from this ack.
 	static OrderResult Attack(unsigned int uid, unsigned int targetUid);
 
+	// `enter <uid> <target>`: Attack's MegaMission with Mission::Enter in the
+	// mission slot - what the engine queues for an infantry clicked onto an
+	// occupiable building, a transport or a repair bay. Same ack rule: QUEUED
+	// only; whether it garrisoned is read from the sync dump (the infantry goes
+	// to limbo, the building's owner flips).
+	static OrderResult Enter(unsigned int uid, unsigned int targetUid);
+
 	// Phase 4: the single-target EventClass family - Sell, Repair, Deploy,
 	// Idle, Scatter, PowerOn and PowerOff. One shape for all seven: Type at
 	// +0, HouseIndex at +2, Frame at +3 and a 5-byte TargetClass at +7 - what
@@ -176,4 +183,8 @@ public:
 	// attack. Every non-Ok arm delegates, so a new rejection reason is added
 	// in exactly one place.
 	static const char* AttackReason(OrderResult result);
+	static const char* EnterReason(OrderResult result);
+
+private:
+	static OrderResult TargetMission(unsigned int uid, unsigned int targetUid, Mission mission);
 };
