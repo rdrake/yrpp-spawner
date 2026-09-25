@@ -38,11 +38,13 @@ public:
 	// ASTARDUMP=no (default): disabled.
 	// ASTARDUMP=yes: enabled, narrow gate applied by a later task (Task 8).
 	// ASTARDUMP=all: enabled, captures every harvester FindPath.
+	// ASTARDUMP=infantry: enabled, captures every InfantryClass FindPath.
 	enum class Mode
 	{
 		Disabled = 0,
 		Narrow = 1,
 		All = 2,
+		Infantry = 3,
 	};
 
 	static bool Enable;
