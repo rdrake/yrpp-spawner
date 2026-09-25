@@ -140,11 +140,11 @@ void MainConfig::ApplyStaticOptions()
 		AstarDump::CaptureMode = AstarDump::Mode::All;
 		Debug::Log("[AstarDump] Armed (mode=all)\n");
 	}
-	else if (_stricmp(this->AstarDumpMode, "infantry") == 0)
+	else if (_stricmp(this->AstarDumpMode, "foot") == 0)
 	{
 		AstarDump::Enable = true;
 		AstarDump::CaptureMode = AstarDump::Mode::Infantry;
-		Debug::Log("[AstarDump] Armed (mode=infantry)\n");
+		Debug::Log("[AstarDump] Armed (mode=foot)\n");
 	}
 	else
 	{
