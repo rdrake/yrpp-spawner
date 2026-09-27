@@ -681,11 +681,17 @@ const char* SyncPrint::Build(int frameSlot, size_t& outLen)
 		PutNL();
 	}
 
-	// Exactly ONE draw from the sim generator, exactly here -- the traced
-	// contract. Ares's own Random is a thunk to the same engine 0x65C780.
-	PutLit("My Random Number: ");
-	PutHex8(static_cast<DWORD>(ScenarioClass::Instance->Random.Random()));
-	PutNL();
+	// Under Ares: exactly ONE draw from the sim generator, exactly here -- the
+	// traced contract. Ares's own Random is a thunk to the same engine 0x65C780.
+	// Without Ares the line is omitted: the retail writer draws nothing, and a
+	// vanilla trace must carry the vanilla RNG stream.
+	auto const ares = AresBase();
+	if (ares)
+	{
+		PutLit("My Random Number: ");
+		PutHex8(static_cast<DWORD>(ScenarioClass::Instance->Random.Random()));
+		PutNL();
+	}
 	PutLit("My Frame: ");
 	PutHex8(static_cast<DWORD>(Unsorted::CurrentFrame));
 	PutNL();
@@ -707,7 +713,6 @@ const char* SyncPrint::Build(int frameSlot, size_t& outLen)
 
 	// Five 21.352 additions absent from the public 0.A source; read off the
 	// shipped bytes at 0x1005F8C6..0x1005F94A.
-	auto const ares = AresBase();
 	PutLit("Mod is ");
 	PutStr(ares ? reinterpret_cast<const char*>(ares + 0xC1078) : "");
 	PutLit(" (");
