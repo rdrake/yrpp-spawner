@@ -65,10 +65,45 @@
 //                            session=<nonce>   must equal Scenario->UniqueID
 //                            id=<n>            must equal the file's number
 //                            frame=<n>         0 = as soon as possible
-//                            verb=<name>       noop | count-technos |
-//                                              fail-test | end
+//                            verb=<name>       see the verb table below
 //                          `end` additionally finalises the sync-dump archive
 //                          and exits the process when HARNESS.QuitOnEnd=yes.
+//
+//   Verb table. Args are further KEY=value lines; `ack` is the reason token
+//   of the `executed` record, `rejects` the reason tokens a `rejected` record
+//   can carry beyond the transport ones (missing-verb, late, id-mismatch,
+//   stale-session, unknown-verb). Every mutating verb also rejects with
+//   not-single-player, no-player-house and, for the event ones, outlist-full.
+//
+//     noop                          ack noop
+//     count-technos                 ack technos=<n>
+//     snapshot                      ack snapshot-written   (failed: snapshot-write-failed)
+//     dump-cells                    ack celldump-at=<frame>  rejects celldump-disabled, celldump-full
+//     move     uid= x= y=           ack move-queued        rejects missing-move-args, target-expired, bad-cell
+//     spawn    type= x= y=          ack spawned-uid=<uid>  rejects missing-spawn-args, bad-cell, unknown-type,
+//                                                                  unsupported-type, allocation-failed, placement-rejected
+//     attack   uid= target=         ack attack-queued      rejects missing-attack-args, attacker-expired,
+//                                                                  target-expired, self-target
+//     sell     uid=                 ack sell-queued        rejects missing-sell-args, target-expired
+//     power    uid= state=on|off    ack power-queued       rejects missing-power-args, target-expired
+//     deploy   uid=                 ack deploy-queued      rejects missing-deploy-args, target-expired
+//     idle     uid=                 ack idle-queued        rejects missing-idle-args, target-expired
+//     scatter  uid=                 ack scatter-queued     rejects missing-scatter-args, target-expired
+//     repair   uid=                 ack repair-queued      rejects missing-repair-args, target-expired
+//     damage   uid= hp=             ack damaged=<before>-to-<after>
+//                                                         rejects missing-damage-args, bad-damage-hp, target-expired
+//     reveal                        ack visionary=<0|1>-to-<0|1>  rejects no-current-player
+//     view     x= y=                ack tac=<x>,<y>        rejects missing-view-args, no-tactical
+//     screenshot                    ack surface=...        (failed: same token, write failed)
+//     fail-test                     failed deliberate-failure
+//     end                           ack end
+//
+//   `*-queued` means EventClass::OutList.Add accepted the event and nothing
+//   more: the engine's Execute arm re-resolves the target and may decline
+//   (an unowned Sell target; PowerOn/PowerOff on a type with no PowerDrain
+//   and Powered=no). `spawned-uid=` and `damaged=` are the two acks that ARE
+//   the effect - both verbs act directly from the hook, after the frame's
+//   logic and before the checksum, and read the result back.
 //                          Values may be padded with spaces/tabs; a value may
 //                          not itself contain a space.
 //   <dir>\acks.txt         append-only, one terminal ack per command:

@@ -34,6 +34,7 @@
 // other TechnoClass consumers use (src/Misc/Bugfixes.OpenTopCloak.cpp).
 #include <FootClass.h>
 #include <Unsorted.h>
+#include <EventClass.h>
 #include <HouseClass.h>
 #include <MapClass.h>
 #include <TacticalClass.h>
@@ -81,6 +82,38 @@ namespace
 	inline unsigned char OverFlagWon()      { return *reinterpret_cast<const unsigned char*>(0xA83D49); }
 	inline unsigned char OverFlagDefeated() { return *reinterpret_cast<const unsigned char*>(0xA8ECD0); }
 	inline unsigned char OverFlagAbort()    { return *reinterpret_cast<const unsigned char*>(0x8B41C0); }
+
+	// The single-target EventClass verbs (HarnessOrders::TargetEvent). One
+	// row per verb: its EventType, the ack token on a successful queue, and
+	// the rejection token when `uid` is missing. `power` is listed under
+	// PowerOn and switches to PowerOff on `state=off` at the call site.
+	struct TargetVerb
+	{
+		const char* Name;
+		EventType Type;
+		const char* Queued;
+		const char* MissingArgs;
+	};
+
+	const TargetVerb targetVerbs[] =
+	{
+		{ "sell",    EventType::Sell,    "sell-queued",    "missing-sell-args"    },
+		{ "power",   EventType::PowerOn, "power-queued",   "missing-power-args"   },
+		{ "deploy",  EventType::Deploy,  "deploy-queued",  "missing-deploy-args"  },
+		{ "idle",    EventType::Idle,    "idle-queued",    "missing-idle-args"    },
+		{ "scatter", EventType::Scatter, "scatter-queued", "missing-scatter-args" },
+		{ "repair",  EventType::Repair,  "repair-queued",  "missing-repair-args"  },
+	};
+
+	const TargetVerb* FindTargetVerb(const char* verb)
+	{
+		for (const TargetVerb& tv : targetVerbs)
+		{
+			if (std::strcmp(verb, tv.Name) == 0)
+				return &tv;
+		}
+		return nullptr;
+	}
 
 	// One buffered observation. Written every invocation, flushed in batches so
 	// we never do file IO on most render calls.
@@ -703,8 +736,11 @@ namespace
 						}
 					}
 				}
-				else if (std::strcmp(buf, "attack") == 0)
+				else if (std::strcmp(buf, "attack") == 0 || std::strcmp(buf, "capture") == 0)
 				{
+					// `capture` shares every line but the Mission (Capture, its
+					// object in dest) and the ack, `capture-queued`.
+					const bool capture = buf[0] == 'c';
 					// The third state-mutating verb, gated identically to move
 					// and spawn (single-player only - HarnessOrders.h). Same
 					// convention: every non-Ok outcome is a terminal
@@ -734,15 +770,116 @@ namespace
 
 					if (!argsOk)
 					{
-						acked = WriteAck(id, "rejected", "missing-attack-args",
+						acked = WriteAck(id, "rejected",
+							capture ? "missing-capture-args" : "missing-attack-args",
 							requestedFrame, frame);
 					}
 					else
 					{
-						const OrderResult result = HarnessOrders::Attack(uid, targetUid);
+						const OrderResult result = capture
+							? HarnessOrders::Capture(uid, targetUid)
+							: HarnessOrders::Attack(uid, targetUid);
 						acked = WriteAck(id,
 							result == OrderResult::Ok ? "executed" : "rejected",
-							HarnessOrders::AttackReason(result), requestedFrame, frame);
+							capture ? HarnessOrders::CaptureReason(result) : HarnessOrders::AttackReason(result),
+							requestedFrame, frame);
+					}
+				}
+				else if (const TargetVerb* tv = FindTargetVerb(buf))
+				{
+					// The fourth state-mutating family, gated identically to
+					// move / spawn / attack (single-player only -
+					// HarnessOrders.h). Six verbs, one code path: each is a
+					// single-target EventClass whose ack token says QUEUED and
+					// nothing more - the engine's per-type Execute arm may
+					// still decline after the event pops (an unowned Sell
+					// target, a PowerOff on a type that drains nothing), and
+					// that outcome is read from the sync dump, never from
+					// here. Every non-Ok outcome is a terminal `rejected`.
+					char argBuf[64];
+					unsigned int uid = 0;
+					bool argsOk = ReadKey(body, "uid", argBuf, sizeof(argBuf));
+					if (argsOk)
+						uid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+
+					EventType type = tv->Type;
+					if (argsOk && tv->Type == EventType::PowerOn)
+					{
+						// `power` is the one verb with a second argument:
+						// state=on|off picks PowerOn or PowerOff. Anything
+						// else is a script error caught before queueing.
+						if (!ReadKey(body, "state", argBuf, sizeof(argBuf)))
+							argsOk = false;
+						else if (std::strcmp(argBuf, "off") == 0)
+							type = EventType::PowerOff;
+						else if (std::strcmp(argBuf, "on") != 0)
+							argsOk = false;
+					}
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", tv->MissingArgs,
+							requestedFrame, frame);
+					}
+					else
+					{
+						const OrderResult result = HarnessOrders::TargetEvent(uid, type);
+						acked = WriteAck(id,
+							result == OrderResult::Ok ? "executed" : "rejected",
+							result == OrderResult::Ok ? tv->Queued : HarnessOrders::ResultReason(result),
+							requestedFrame, frame);
+					}
+				}
+				else if (std::strcmp(buf, "damage") == 0)
+				{
+					// Direct, like spawn: no event, the object's own
+					// ReceiveDamage from this hook. The ack carries Health
+					// read back either side of the call, so unlike the event
+					// verbs `executed` here IS the effect - `damaged=125-to-25`
+					// is a measurement, and a kill reads `-to-0`.
+					char argBuf[64];
+					unsigned int uid = 0;
+					int hp = 0;
+					bool argsOk = true;
+
+					if (ReadKey(body, "uid", argBuf, sizeof(argBuf)))
+						uid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+					else
+						argsOk = false;
+
+					if (ReadKey(body, "hp", argBuf, sizeof(argBuf)))
+						hp = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-damage-args",
+							requestedFrame, frame);
+					}
+					else if (hp <= 0)
+					{
+						// A negative amount HEALS in ReceiveDamage; the verb is
+						// named damage and says so rather than doing the other.
+						acked = WriteAck(id, "rejected", "bad-damage-hp",
+							requestedFrame, frame);
+					}
+					else
+					{
+						int before = 0;
+						int after = 0;
+						const OrderResult result = HarnessOrders::Damage(uid, hp, &before, &after);
+						if (result == OrderResult::Ok)
+						{
+							char reason[64];
+							std::snprintf(reason, sizeof(reason), "damaged=%d-to-%d", before, after);
+							acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+						}
+						else
+						{
+							acked = WriteAck(id, "rejected",
+								HarnessOrders::ResultReason(result), requestedFrame, frame);
+						}
 					}
 				}
 				else if (std::strcmp(buf, "reveal") == 0)
