@@ -384,6 +384,9 @@ DEFINE_HOOK(0x42C900, AStarClass_FindPath_AstarDumpEntry, 0x5)
 	case AstarDump::Mode::All:
 		armThis = IsHarvesterFoot(pFoot);
 		break;
+	case AstarDump::Mode::Infantry:
+		armThis = pFoot && pFoot->WhatAmI() == AbstractType::Infantry;
+		break;
 	case AstarDump::Mode::Disabled:
 	default:
 		armThis = false;
@@ -399,6 +402,8 @@ DEFINE_HOOK(0x42C900, AStarClass_FindPath_AstarDumpEntry, 0x5)
 	SpeedType speedType = SpeedType::None;
 	if (UnitTypeClass* pType = GetUnitTypeIfUnit(pFoot))
 		speedType = pType->SpeedType;
+	else if (AstarDump::CaptureMode == AstarDump::Mode::Infantry)
+		speedType = pFoot->GetTechnoType()->SpeedType;
 
 	AstarDump::Arm(frame, unitId, pStart->X, pStart->Y, pDest->X, pDest->Y,
 		SpeedTypeName(speedType));
