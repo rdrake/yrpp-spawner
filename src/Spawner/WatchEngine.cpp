@@ -37,6 +37,7 @@ namespace
 	constexpr long RingSize = 1L << 18;
 	constexpr int CandidateScanDwords = 256;
 	constexpr unsigned int TrapFlag = 0x100;
+	constexpr unsigned int NoFaultIndex = 0xFFFFFFFF;
 
 	struct Page
 	{
@@ -284,18 +285,20 @@ namespace
 				const TargetInfo& target = targets[t];
 				if (!target.Resolved || fault + 8 <= target.Resolved || fault >= target.Resolved + target.Length)
 					continue;
-				matched = true;
+				// A fault up to 7 bytes BELOW the range may be a wide store that
+				// reaches into it, or a store to the field before it; the access
+				// size is unknown, so it records only the dwords that changed.
+				const bool inside = fault >= target.Resolved;
+				if (inside)
+					matched = true;
 				if (p->HitCount == MaxHitsPerStep)
 					continue;
 				Hit& hit = p->Hits[p->HitCount++];
 				const unsigned int dwords = target.Length / 4;
-				unsigned int index = (fault > target.Resolved ? fault - target.Resolved : 0) / 4;
-				if (index >= dwords)
-					index = dwords - 1;
 				hit.Target = t;
 				hit.Frame = frameFn ? frameFn() : 0;
 				hit.Fault = fault;
-				hit.FaultIndex = index;
+				hit.FaultIndex = inside ? (fault - target.Resolved) / 4 : NoFaultIndex;
 				for (unsigned int d = 0; d < dwords; ++d)
 					hit.Snapshot[d] = reinterpret_cast<volatile unsigned int*>(target.Resolved)[d];
 				hit.Eip = context->Eip;

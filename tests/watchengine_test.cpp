@@ -70,6 +70,7 @@ int main(int argc, char** argv)
 	Caller((volatile unsigned int*)(heapB + 0x214), 100);             // Deref row 99 -> 100, candidate = return into Caller
 	const unsigned int retIntoCaller = g_ret;
 	*(volatile unsigned int*)(heapB + 0x300) = 1;     // neighbour on heapB
+	*(volatile unsigned int*)(countries - 4) = 5;    // the field BELOW the range: neighbour, no row
 	g_frame = 3;
 	*(volatile unsigned int*)slot = (unsigned int)(uintptr_t)heapC;   // Base row; heapB released
 	*(volatile unsigned int*)(heapB + 0x214) = 101;   // no longer watched, no trap
@@ -100,7 +101,7 @@ int main(int argc, char** argv)
 			CHECK(w[i].Target == 0 && w[i].NewValue == 0xEE, "rep row %d", i);
 		CHECK(w[6].Offset == 16 && w[9].Offset == 28, "rep offsets %u..%u", w[6].Offset, w[9].Offset);
 	}
-	CHECK(NeighbourTraps() == 2, "neighbour %ld (want 2)", NeighbourTraps());
+	CHECK(NeighbourTraps() == 3, "neighbour %ld (want 3)", NeighbourTraps());
 	CHECK(*(volatile unsigned int*)(heapB + 0x214) == 101, "released page write lost");
 	Disarm();
 	*(volatile unsigned int*)countries = 1;   // must not fault after disarm

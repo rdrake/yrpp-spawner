@@ -40,7 +40,10 @@
 // Wine; WatchDump.cpp is the game-side glue.
 //
 // LIMITS. A syscall that writes into a watched page fails instead of
-// faulting (the kernel does not raise into user mode). A second thread's
+// faulting (the kernel does not raise into user mode). On a HEAP page that
+// can hang the game: `[A8B230]+214:4` (the UniqueID counter) spun the spawn
+// round at 100% CPU with no further fault after the slot store. Watch
+// globals; reach a heap field through a hook on its writer instead. A second thread's
 // store to a watched page, in the window between one thread's fault and its
 // single-step, is not seen. The handler never allocates, so a store made
 // under the heap lock cannot deadlock it.

@@ -33,8 +33,8 @@
 //
 // Targets: `ADDR:LEN` for a global, `[SLOT]+OFF:LEN` for a field of the
 // object whose pointer lives at SLOT (re-resolved whenever SLOT is written),
-// e.g. `A8B29C:32,[A8B230]+214:4` = AISlots.Countries and the ScenarioClass
-// UniqueID counter.
+// e.g. `A8B29C:32` = AISlots.Countries. A `[SLOT]` target on a heap page
+// can hang the game (WatchEngine.h, LIMITS).
 //
 // Mechanism and limits: Spawner/WatchEngine.h. The game's simulation is not
 // touched - no RNG draw, no game allocation, no game-state write - but every
