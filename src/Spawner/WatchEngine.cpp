@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 namespace WatchEngine
 {
@@ -35,9 +36,12 @@ namespace
 	constexpr int MaxPagesPerStep = 4;
 	constexpr int MaxHitsPerStep = 4;
 	constexpr long RingSize = 1L << 18;
+	constexpr long ExecRingSize = 1L << 16;
 	constexpr int CandidateScanDwords = 256;
 	constexpr unsigned int TrapFlag = 0x100;
 	constexpr unsigned int NoFaultIndex = 0xFFFFFFFF;
+	constexpr unsigned char Int3 = 0xCC;
+	constexpr int NoExec = -1;
 
 	struct Page
 	{
@@ -69,9 +73,11 @@ namespace
 		unsigned int Pages[MaxPagesPerStep];
 		int HitCount;
 		Hit Hits[MaxHitsPerStep];
+		int Exec;                   // the exec target whose int3 this step re-plants
 	};
 
-	TargetInfo targets[MaxTargets];
+	// + 1: the self-tests borrow the slot past a full table.
+	TargetInfo targets[MaxTargets + 1];
 	int targetCount = 0;
 	Page pages[MaxPages];
 	int pageCount = 0;
@@ -86,12 +92,22 @@ namespace
 	unsigned int textHigh = 0;
 	unsigned int ownLow = 0;
 	unsigned int ownHigh = 0;
+	unsigned int ownTextLow = 0;
+	unsigned int ownTextHigh = 0;
 
 	Row ring[RingSize];
 	volatile LONG ringNext = 0;
 	LONG ringDrained = 0;
 	volatile LONG dropped = 0;
 	volatile LONG neighbour = 0;
+
+	ExecInfo execs[MaxExecTargets + 1];
+	int execCount = 0;
+	int execSelfTestHits = 0;
+	ExecRow execRing[ExecRingSize];
+	volatile LONG execRingNext = 0;
+	LONG execRingDrained = 0;
+	volatile LONG execDropped = 0;
 
 	void Lock()
 	{
@@ -256,11 +272,117 @@ namespace
 		row.Valid = 1;
 	}
 
+	void WriteCode(unsigned int address, unsigned char value)
+	{
+		DWORD old = 0;
+		DWORD ignored = 0;
+		void* at = reinterpret_cast<void*>(address);
+		VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old);
+		*reinterpret_cast<volatile unsigned char*>(address) = value;
+		VirtualProtect(at, 1, old, &ignored);
+		FlushInstructionCache(GetCurrentProcess(), at, 1);
+	}
+
+	bool Readable(unsigned int address)
+	{
+		for (unsigned int probe : { address, address + 3 })
+		{
+			MEMORY_BASIC_INFORMATION mbi;
+			if (!VirtualQuery(reinterpret_cast<void*>(probe), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+				return false;
+			if (mbi.Protect == 0 || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+				return false;
+		}
+		return true;
+	}
+
+	int FindExec(unsigned int address)
+	{
+		for (int i = 0; i < execCount; ++i)
+			if (execs[i].Address == address && execs[i].Planted)
+				return i;
+		return NoExec;
+	}
+
+	void RecordExec(int index, const CONTEXT* context, DWORD threadId)
+	{
+		const LONG slot = InterlockedIncrement(&execRingNext) - 1;
+		if (slot >= ExecRingSize)
+		{
+			InterlockedIncrement(&execDropped);
+			return;
+		}
+		ExecRow& row = execRing[slot];
+		row.Frame = frameFn ? frameFn() : 0;
+		row.ThreadId = threadId;
+		row.Target = static_cast<unsigned int>(index);
+		row.Regs[Eax] = context->Eax;
+		row.Regs[Ecx] = context->Ecx;
+		row.Regs[Edx] = context->Edx;
+		row.Regs[Ebx] = context->Ebx;
+		row.Regs[Esp] = context->Esp;
+		row.Regs[Ebp] = context->Ebp;
+		row.Regs[Esi] = context->Esi;
+		row.Regs[Edi] = context->Edi;
+		for (int i = 0; i < ExecStackDwords; ++i)
+		{
+			const unsigned int at = context->Esp + 4 * i;
+			row.Stack[i] = Readable(at) ? *reinterpret_cast<const unsigned int*>(at) : 0;
+		}
+		const ExecInfo& exec = execs[index];
+		row.ReadOk = 0;
+		for (int r = 0; r < exec.ReadCount; ++r)
+		{
+			const ReadSpec& read = exec.Reads[r];
+			unsigned int value = row.Regs[read.Base];
+			bool ok = true;
+			for (int s = 0; s < read.Steps && ok; ++s)
+			{
+				const unsigned int at = value + static_cast<unsigned int>(read.Offsets[s]);
+				ok = Readable(at);
+				value = ok ? *reinterpret_cast<const unsigned int*>(at) : 0;
+			}
+			row.Reads[r] = value;
+			if (ok)
+				row.ReadOk |= 1u << r;
+		}
+		MemoryBarrier();
+		row.Valid = 1;
+	}
+
 	LONG CALLBACK Handler(EXCEPTION_POINTERS* info)
 	{
 		const EXCEPTION_RECORD* record = info->ExceptionRecord;
 		CONTEXT* context = info->ContextRecord;
 		const DWORD threadId = GetCurrentThreadId();
+
+		if (record->ExceptionCode == EXCEPTION_BREAKPOINT)
+		{
+			// Windows reports the int3's own address; accept the byte after it
+			// too, and set Eip explicitly, so either convention resumes at ADDR.
+			const unsigned int at = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(record->ExceptionAddress));
+			Lock();
+			int index = FindExec(at);
+			if (index == NoExec)
+				index = FindExec(at - 1);
+			Pending* p = index != NoExec ? FindPending(threadId, true) : nullptr;
+			if (!p || p->Exec != NoExec)
+			{
+				Unlock();
+				return EXCEPTION_CONTINUE_SEARCH;
+			}
+			ExecInfo& exec = execs[index];
+			RecordExec(index, context, threadId);
+			++exec.Hits;
+			WriteCode(exec.Address, exec.Original);
+			exec.Planted = false;
+			p->Exec = index;
+			Unlock();
+
+			context->Eip = exec.Address;
+			context->EFlags |= TrapFlag;
+			return EXCEPTION_CONTINUE_EXECUTION;
+		}
 
 		if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
 		{
@@ -319,10 +441,20 @@ namespace
 		{
 			Lock();
 			Pending* p = FindPending(threadId, false);
-			if (!p || p->PageCount == 0)
+			if (!p || (p->PageCount == 0 && p->Exec == NoExec))
 			{
 				Unlock();
 				return EXCEPTION_CONTINUE_SEARCH;
+			}
+			if (p->Exec != NoExec)
+			{
+				ExecInfo& exec = execs[p->Exec];
+				if (handler && (exec.MaxHits == 0 || exec.Hits < exec.MaxHits))
+				{
+					WriteCode(exec.Address, Int3);
+					exec.Planted = true;
+				}
+				p->Exec = NoExec;
 			}
 			for (int i = 0; i < p->HitCount; ++i)
 			{
@@ -395,11 +527,125 @@ namespace
 		return true;
 	}
 
+	bool ParseSigned(const char*& cursor, int* out)
+	{
+		const char sign = *cursor;
+		if (sign != '+' && sign != '-')
+			return false;
+		++cursor;
+		unsigned int magnitude = 0;
+		if (!ParseHex(cursor, &magnitude))
+			return false;
+		*out = sign == '-' ? -static_cast<int>(magnitude) : static_cast<int>(magnitude);
+		return true;
+	}
+
+	bool ParseRead(const char*& cursor, ReadSpec* read)
+	{
+		static const char* const names[RegCount] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
+		read->Base = -1;
+		for (int r = 0; r < RegCount; ++r)
+			if (_strnicmp(cursor, names[r], 3) == 0)
+				read->Base = r;
+		if (read->Base < 0)
+			return false;
+		cursor += 3;
+		read->Steps = 0;
+		if (!ParseSigned(cursor, &read->Offsets[read->Steps++]))
+			return false;
+		while (*cursor == '>')
+		{
+			++cursor;
+			if (read->Steps == MaxReadSteps)
+				return false;
+			int offset = 0;
+			if (*cursor == '+' || *cursor == '-')
+			{
+				if (!ParseSigned(cursor, &offset))
+					return false;
+			}
+			else
+			{
+				unsigned int magnitude = 0;
+				if (!ParseHex(cursor, &magnitude))
+					return false;
+				offset = static_cast<int>(magnitude);
+			}
+			read->Offsets[read->Steps++] = offset;
+		}
+		return true;
+	}
+
+	bool ParseExec(const char*& cursor, const char* start, char* err, unsigned int errLen)
+	{
+		unsigned int address = 0;
+		if (!ParseHex(cursor, &address))
+		{
+			std::snprintf(err, errLen, "bad exec address at \"%s\"", start);
+			return false;
+		}
+		MEMORY_BASIC_INFORMATION mbi;
+		const DWORD executable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+		if (!VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT
+			|| !(mbi.Protect & executable))
+		{
+			std::snprintf(err, errLen, "exec target \"%s\" is not committed executable memory", start);
+			return false;
+		}
+		if (address >= ownTextLow && address < ownTextHigh)
+		{
+			std::snprintf(err, errLen, "exec target \"%s\" is in the spawner's own code", start);
+			return false;
+		}
+		if (execCount == MaxExecTargets)
+		{
+			std::snprintf(err, errLen, "more than %d exec targets", MaxExecTargets);
+			return false;
+		}
+		for (int i = 0; i < execCount; ++i)
+		{
+			if (execs[i].Address == address)
+			{
+				std::snprintf(err, errLen, "exec target \"%s\" given twice", start);
+				return false;
+			}
+		}
+		ExecInfo exec = {};
+		exec.Address = address;
+		while (*cursor == '/')
+		{
+			++cursor;
+			if (exec.ReadCount == MaxReads || !ParseRead(cursor, &exec.Reads[exec.ReadCount++]))
+			{
+				std::snprintf(err, errLen, "exec target \"%s\": a read is `reg+OFF[>OFF]...`, at most %d reads of %d steps", start, MaxReads, MaxReadSteps);
+				return false;
+			}
+		}
+		if (*cursor == '#')
+		{
+			char* end = nullptr;
+			exec.MaxHits = std::strtol(cursor + 1, &end, 10);
+			if (end == cursor + 1 || exec.MaxHits <= 0)
+			{
+				std::snprintf(err, errLen, "exec target \"%s\": #MAXHITS must be a positive decimal", start);
+				return false;
+			}
+			cursor = end;
+		}
+		execs[execCount++] = exec;
+		return true;
+	}
+
 	bool ParseTarget(const char*& cursor, char* err, unsigned int errLen)
 	{
 		while (*cursor == ' ')
 			++cursor;
 		const char* start = cursor;
+		if ((cursor[0] == 'X' || cursor[0] == 'x') && cursor[1] == ':')
+		{
+			cursor += 2;
+			return ParseExec(cursor, start, err, errLen);
+		}
 		const bool deref = *cursor == '[';
 		unsigned int address = 0;
 		unsigned int offset = 0;
@@ -456,6 +702,11 @@ namespace
 		if (!page)
 			return 0;
 		const unsigned int address = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(page)) + 0x40;
+		if (targetCount >= static_cast<int>(sizeof(targets) / sizeof(targets[0])))
+		{
+			VirtualFree(page, 0, MEM_RELEASE);
+			return 0;
+		}
 		const int saved = targetCount;
 		targets[targetCount++] = { TargetKind::Static, address, 0, 4, address, -1 };
 		int hits = 0;
@@ -484,6 +735,76 @@ namespace
 		return hits;
 	}
 
+	bool Plant(ExecInfo& exec)
+	{
+		exec.Original = *reinterpret_cast<const unsigned char*>(exec.Address);
+		if (exec.Original == Int3)
+			return false;
+		WriteCode(exec.Address, Int3);
+		exec.Planted = true;
+		return true;
+	}
+
+	void Unplant(ExecInfo& exec)
+	{
+		if (exec.Planted)
+			WriteCode(exec.Address, exec.Original);
+		exec.Planted = false;
+	}
+
+	// Two calls through a planted probe: the first proves the breakpoint is
+	// delivered, the second that the single-step re-planted it. The argument
+	// read back through `esp+4` proves the stack and the read chain. The probe
+	// is a stub on its own page: under Wine on Apple Silicon a code write to
+	// the page the writer is running on kills the process.
+	int RunExecSelfTest()
+	{
+		if (execCount >= static_cast<int>(sizeof(execs) / sizeof(execs[0])))
+			return 0;
+		// mov eax, [esp+4]; lea eax, [eax+eax*2+1]; ret
+		static const unsigned char stub[] = { 0x8B, 0x44, 0x24, 0x04, 0x8D, 0x44, 0x40, 0x01, 0xC3 };
+		void* page = VirtualAlloc(nullptr, PageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+		if (!page)
+			return 0;
+		std::memcpy(page, stub, sizeof(stub));
+		DWORD ignored = 0;
+		VirtualProtect(page, PageSize, PAGE_EXECUTE_READ, &ignored);
+		FlushInstructionCache(GetCurrentProcess(), page, sizeof(stub));
+		const auto execProbe = reinterpret_cast<int(__cdecl*)(int)>(page);
+
+		ExecInfo& exec = execs[execCount];
+		exec = {};
+		exec.Address = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(page));
+		exec.ReadCount = 1;
+		exec.Reads[0] = { Esp, 1, { 4 } };
+		++execCount;
+		int hits = 0;
+		if (Plant(exec))
+		{
+			const int first = execProbe(0x5A);
+			const int second = execProbe(0xA5);
+			const LONG end = execRingNext < ExecRingSize ? execRingNext : ExecRingSize;
+			for (LONG i = 0; i < end; ++i)
+			{
+				const ExecRow& row = execRing[i];
+				if (!row.Valid || row.Target != static_cast<unsigned int>(execCount - 1) || !(row.ReadOk & 1))
+					continue;
+				if ((hits == 0 && row.Reads[0] == 0x5A && row.Stack[1] == 0x5A) || (hits == 1 && row.Reads[0] == 0xA5))
+					++hits;
+			}
+			if (first != 0x5A * 3 + 1 || second != 0xA5 * 3 + 1)
+				hits = 0;
+			Unplant(exec);
+		}
+		--execCount;
+		for (LONG i = 0; i < ExecRingSize && i < execRingNext; ++i)
+			execRing[i].Valid = 0;
+		execRingNext = 0;
+		execRingDrained = 0;
+		VirtualFree(page, 0, MEM_RELEASE);
+		return hits;
+	}
+
 	void ResetPending()
 	{
 		for (Pending& p : pending)
@@ -491,6 +812,7 @@ namespace
 			p.Owner = 0;
 			p.PageCount = 0;
 			p.HitCount = 0;
+			p.Exec = NoExec;
 		}
 	}
 }
@@ -506,7 +828,7 @@ bool Arm(const char* spec, FrameFn frame, char* err, unsigned int errLen)
 	HMODULE own = nullptr;
 	GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 		reinterpret_cast<LPCSTR>(&Arm), &own);
-	if (!own || !ModuleRange(own, &ownLow, &ownHigh, false)
+	if (!own || !ModuleRange(own, &ownLow, &ownHigh, false) || !ModuleRange(own, &ownTextLow, &ownTextHigh, true)
 		|| !ModuleRange(GetModuleHandleA(nullptr), &textLow, &textHigh, true))
 	{
 		std::snprintf(err, errLen, "cannot read the module headers");
@@ -514,11 +836,13 @@ bool Arm(const char* spec, FrameFn frame, char* err, unsigned int errLen)
 	}
 
 	targetCount = 0;
+	execCount = 0;
 	for (const char* cursor = spec; *cursor; )
 	{
 		if (!ParseTarget(cursor, err, errLen))
 		{
 			targetCount = 0;
+			execCount = 0;
 			return false;
 		}
 		while (*cursor == ' ')
@@ -529,10 +853,11 @@ bool Arm(const char* spec, FrameFn frame, char* err, unsigned int errLen)
 		{
 			std::snprintf(err, errLen, "unexpected \"%s\" after a target", cursor);
 			targetCount = 0;
+			execCount = 0;
 			return false;
 		}
 	}
-	if (targetCount == 0)
+	if (targetCount == 0 && execCount == 0)
 	{
 		std::snprintf(err, errLen, "no targets");
 		return false;
@@ -556,10 +881,35 @@ bool Arm(const char* spec, FrameFn frame, char* err, unsigned int errLen)
 		handler = nullptr;
 		ResetPending();
 		targetCount = 0;
+		execCount = 0;
 		return false;
+	}
+	if (execCount > 0)
+	{
+		execSelfTestHits = RunExecSelfTest();
+		if (execSelfTestHits != 2)
+		{
+			std::snprintf(err, errLen, "exec self-test recorded %d of 2 calls; launch Syringe with --detach", execSelfTestHits);
+			RemoveVectoredExceptionHandler(handler);
+			handler = nullptr;
+			ResetPending();
+			targetCount = 0;
+			execCount = 0;
+			return false;
+		}
 	}
 
 	Lock();
+	for (int e = 0; e < execCount; ++e)
+	{
+		if (!Plant(execs[e]))
+		{
+			Unlock();
+			std::snprintf(err, errLen, "exec target %d at %08X already holds an int3", e, execs[e].Address);
+			Disarm();
+			return false;
+		}
+	}
 	for (int t = 0; t < targetCount; ++t)
 	{
 		if (targets[t].Kind == TargetKind::Deref)
@@ -586,6 +936,8 @@ void Disarm()
 		VirtualProtect(reinterpret_cast<void*>(pages[i].Base), PageSize, pages[i].Original, &ignored);
 	}
 	pageCount = 0;
+	for (int e = 0; e < execCount; ++e)
+		Unplant(execs[e]);
 	ResetPending();
 	Unlock();
 	if (handler)
@@ -596,8 +948,12 @@ void Disarm()
 
 bool Armed() { return armed; }
 int SelfTestHits() { return selfTestHits; }
+int ExecSelfTestHits() { return execSelfTestHits; }
 int TargetCount() { return targetCount; }
 const TargetInfo& Target(int index) { return targets[index]; }
+int ExecCount() { return execCount; }
+const ExecInfo& Exec(int index) { return execs[index]; }
+long ExecDropped() { return execDropped; }
 unsigned int TextLow() { return textLow; }
 unsigned int TextHigh() { return textHigh; }
 long Dropped() { return dropped; }
@@ -624,6 +980,23 @@ int Drain(void(__cdecl* emit)(const Row& row, void* ctx), void* ctx)
 	}
 	if (ringDrained == limit && InterlockedCompareExchange(&ringNext, 0, end) == end)
 		ringDrained = 0;
+	return emitted;
+}
+
+int DrainExec(void(__cdecl* emit)(const ExecRow& row, void* ctx), void* ctx)
+{
+	const LONG end = execRingNext;
+	const LONG limit = end < ExecRingSize ? end : ExecRingSize;
+	int emitted = 0;
+	while (execRingDrained < limit && execRing[execRingDrained].Valid)
+	{
+		emit(execRing[execRingDrained], ctx);
+		execRing[execRingDrained].Valid = 0;
+		++execRingDrained;
+		++emitted;
+	}
+	if (execRingDrained == limit && InterlockedCompareExchange(&execRingNext, 0, end) == end)
+		execRingDrained = 0;
 	return emitted;
 }
 }

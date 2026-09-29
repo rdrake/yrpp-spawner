@@ -89,9 +89,29 @@ namespace
 		}
 		// c1..c4 are stack dwords that look like return addresses, nearest
 		// first; a stale frame can supply one, so read them as candidates.
+		static const char* const regNames[] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
+		if (WatchEngine::ExecCount() > 0)
+			std::fprintf(pFile, "XSELFTEST=%d of 2\n", WatchEngine::ExecSelfTestHits());
+		for (int i = 0; i < WatchEngine::ExecCount(); ++i)
+		{
+			const auto& x = WatchEngine::Exec(i);
+			std::fprintf(pFile, "XT=%d,%08X,%ld", i, x.Address, x.MaxHits);
+			for (int r = 0; r < x.ReadCount; ++r)
+			{
+				const auto& read = x.Reads[r];
+				std::fprintf(pFile, ",%s", regNames[read.Base]);
+				for (int s = 0; s < read.Steps; ++s)
+					std::fprintf(pFile, "%s%s%X", s ? ">" : "", read.Offsets[s] < 0 ? "-" : "+",
+						static_cast<unsigned int>(read.Offsets[s] < 0 ? -read.Offsets[s] : read.Offsets[s]));
+			}
+			std::fprintf(pFile, "\n");
+		}
 		std::fprintf(pFile, "COLUMNS.T=index,kind,slot,offset,length,owner\n");
 		std::fprintf(pFile, "COLUMNS.W=frame,tid,eip,fault,target,offset,old,new,c1,c2,c3,c4\n");
 		std::fprintf(pFile, "COLUMNS.F=frame,rows,neighbour,dropped\n");
+		std::fprintf(pFile, "COLUMNS.XT=index,address,maxhits,read0..read3\n");
+		std::fprintf(pFile, "COLUMNS.X=frame,tid,target,eax,ecx,edx,ebx,esp,ebp,esi,edi,s0,s1,s2,s3,then one per XT read\n");
+		std::fprintf(pFile, "COLUMNS.FX=frame,rows,dropped\n");
 		Debug::Log("[WatchDump] Opened %s\n", path);
 		return true;
 	}
@@ -104,6 +124,26 @@ namespace
 			row.Candidates[0], row.Candidates[1], row.Candidates[2], row.Candidates[3]);
 	}
 
+	// s0 is the return address at a function's first instruction. A read that
+	// met unreadable memory prints `-`, never a value.
+	void __cdecl EmitExec(const WatchEngine::ExecRow& row, void*)
+	{
+		std::fprintf(pFile, "X=%d,%u,%u", row.Frame, row.ThreadId, row.Target);
+		for (unsigned int reg : row.Regs)
+			std::fprintf(pFile, ",%08X", reg);
+		for (unsigned int dword : row.Stack)
+			std::fprintf(pFile, ",%08X", dword);
+		const int reads = WatchEngine::Exec(static_cast<int>(row.Target)).ReadCount;
+		for (int r = 0; r < reads; ++r)
+		{
+			if (row.ReadOk & (1u << r))
+				std::fprintf(pFile, ",%08X", row.Reads[r]);
+			else
+				std::fprintf(pFile, ",-");
+		}
+		std::fprintf(pFile, "\n");
+	}
+
 	void Flush(int frame)
 	{
 		if (!EnsureFile())
@@ -111,6 +151,12 @@ namespace
 		const int rows = WatchEngine::Drain(EmitRow, nullptr);
 		rowsWritten += rows;
 		std::fprintf(pFile, "F=%d,%d,%ld,%ld\n", frame, rows, WatchEngine::NeighbourTraps(), WatchEngine::Dropped());
+		if (WatchEngine::ExecCount() > 0)
+		{
+			const int execRows = WatchEngine::DrainExec(EmitExec, nullptr);
+			rowsWritten += execRows;
+			std::fprintf(pFile, "FX=%d,%d,%ld\n", frame, execRows, WatchEngine::ExecDropped());
+		}
 		std::fflush(pFile);
 	}
 }
@@ -124,8 +170,9 @@ void WatchDump::Arm(const char* targets, int maxFramesArg)
 		return;
 	}
 	maxFrames = maxFramesArg;
-	Debug::Log("[WatchDump] Armed %d targets from \"%s\" (self-test %d of 2, MaxFrames=%d)\n",
-		WatchEngine::TargetCount(), targets, WatchEngine::SelfTestHits(), maxFrames);
+	Debug::Log("[WatchDump] Armed %d targets and %d exec targets from \"%s\" (self-test %d of 2, exec self-test %d of 2, MaxFrames=%d)\n",
+		WatchEngine::TargetCount(), WatchEngine::ExecCount(), targets, WatchEngine::SelfTestHits(),
+		WatchEngine::ExecSelfTestHits(), maxFrames);
 }
 
 void WatchDump::PerFrame()

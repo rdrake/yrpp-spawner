@@ -24,12 +24,38 @@ __attribute__((noinline)) static void StoreIt(volatile unsigned int* p, unsigned
 }
 __attribute__((noinline)) static void Caller(volatile unsigned int* p, unsigned int v) { StoreIt(p, v); }
 
+struct Obj { unsigned int vtable; unsigned char pad[0x1C0]; unsigned int field; };  // field at +0x1C4
+static volatile unsigned int g_ret2 = 0;
+// Exec targets live in their own section, off the engine's page (WatchEngine.h, LIMITS).
+extern "C" __attribute__((noinline, section(".hookme"))) int __cdecl Hooked(int a, Obj* o)
+{
+	g_ret2 = (unsigned int)(uintptr_t)__builtin_return_address(0);
+	return a + (int)o->field;
+}
+__attribute__((noinline)) static int CallHooked(int a, Obj* o) { return Hooked(a, o); }
+
+// A hooked instruction that is itself a store into a watched page: both traps
+// fire before one single-step.
+extern "C" char storepoint[];
+__attribute__((noinline, section(".hookme"))) static void StoreAtPoint(volatile unsigned int* p, unsigned int v)
+{
+	__asm__ volatile(".globl _storepoint\n_storepoint: movl %1, (%0)" :: "r"(p), "r"(v) : "memory");
+}
+
+struct CollectedX { ExecRow rows[16]; int n; };
+static void __cdecl CollectX(const ExecRow& r, void* ctx)
+{
+	CollectedX* c = static_cast<CollectedX*>(ctx);
+	if (c->n < 16) c->rows[c->n++] = r;
+}
+
 static int failures = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { ++failures; printf("FAIL %s:%d ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 int main(int argc, char** argv)
 {
 	freopen("engtest.out", "w", stdout);
+	setvbuf(stdout, nullptr, _IONBF, 0);
 	volatile FARPROC keep = GetProcAddress(LoadLibraryA("kernel32.dll"), "GetTickCount"); (void)keep;
 	__asm__ volatile(".globl hookpoint\nhookpoint: nop; nop; nop; nop; nop; nop; nop; nop");
 	const bool expectFail = argc > 1 && !strcmp(argv[1], "expect-fail");
@@ -105,6 +131,70 @@ int main(int argc, char** argv)
 	CHECK(*(volatile unsigned int*)(heapB + 0x214) == 101, "released page write lost");
 	Disarm();
 	*(volatile unsigned int*)countries = 1;   // must not fault after disarm
+
+	// Phase 2: a FULL watch table (the self-test borrows the slot past it) plus
+	// exec targets.
+	const unsigned int hooked = (unsigned int)(uintptr_t)&Hooked;
+	const unsigned int point = (unsigned int)(uintptr_t)storepoint;
+	const unsigned char hookedByte = *(const unsigned char*)hooked;
+	const unsigned int watched = dataAddr + 0x800;
+	char spec2[512];
+	int len = 0;
+	for (int i = 0; i < MaxTargets - 1; ++i)
+		len += snprintf(spec2 + len, sizeof spec2 - len, "%X:4,", dataAddr + 0x400 + 0x10 * i);
+	snprintf(spec2 + len, sizeof spec2 - len, "%X:4, X:%X/esp+4/esp+8>+1C4/esp+4>0#2, x:0x%X/eax+0", watched, hooked, point);
+	const bool ok2 = Arm(spec2, FrameNow, err, sizeof err);
+	printf("arm2=%d err=\"%s\" selftest=%d xselftest=%d targets=%d exec=%d\n", ok2, err, SelfTestHits(), ExecSelfTestHits(), TargetCount(), ExecCount());
+	CHECK(ok2, "arm2 failed: %s", err);
+	CHECK(SelfTestHits() == 2, "full-table selftest %d", SelfTestHits());
+	CHECK(ExecSelfTestHits() == 2, "exec selftest %d", ExecSelfTestHits());
+	CHECK(TargetCount() == MaxTargets && ExecCount() == 2, "targets %d exec %d", TargetCount(), ExecCount());
+
+	Obj obj = {};
+	obj.vtable = 0x12345678;
+	obj.field = 40;
+	g_frame = 10;
+	const int r1 = CallHooked(5, &obj);
+	const unsigned int ret1 = g_ret2;
+	obj.field = 41;
+	const int r2 = CallHooked(6, &obj);
+	const int r3 = CallHooked(7, &obj);   // past #2: no row, int3 gone
+	CHECK(r1 == 45 && r2 == 47 && r3 == 48, "hooked results %d %d %d", r1, r2, r3);
+	CHECK(*(const unsigned char*)hooked == hookedByte, "int3 still planted past #2");
+	g_frame = 11;
+	StoreAtPoint((volatile unsigned int*)watched, 0x77);
+	StoreAtPoint((volatile unsigned int*)watched, 0x78);
+
+	CollectedX gx = {};
+	DrainExec(CollectX, &gx);
+	Collected gw = {};
+	Drain(Collect, &gw);
+	for (int i = 0; i < gx.n; ++i)
+	{
+		const ExecRow& x = gx.rows[i];
+		printf("X=%d,t%u,esp=%08X,s0=%08X,s1=%08X,r=%08X/%08X/%08X ok=%X\n", x.Frame, x.Target, x.Regs[Esp], x.Stack[0], x.Stack[1], x.Reads[0], x.Reads[1], x.Reads[2], x.ReadOk);
+	}
+	for (int i = 0; i < gw.n; ++i)
+		printf("W=%d,%08X,t%u,%u->%u\n", gw.rows[i].Frame, gw.rows[i].Eip, gw.rows[i].Target, gw.rows[i].OldValue, gw.rows[i].NewValue);
+	CHECK(gx.n == 4, "exec rows %d (want 4)", gx.n);
+	if (gx.n == 4)
+	{
+		const ExecRow* x = gx.rows;
+		CHECK(x[0].Target == 0 && x[0].Frame == 10 && x[0].Stack[0] == ret1 && x[0].Stack[1] == 5, "x0 s0 %08X want %08X", x[0].Stack[0], ret1);
+		CHECK(x[0].Reads[0] == 5 && x[0].Reads[1] == 40 && x[0].ReadOk == 3, "x0 reads %u %u ok %X", x[0].Reads[0], x[0].Reads[1], x[0].ReadOk);
+		CHECK(x[1].Target == 0 && x[1].Reads[0] == 6 && x[1].Reads[1] == 41, "x1 reads");
+		CHECK(x[2].Target == 1 && x[2].Frame == 11 && x[3].Target == 1, "store-point rows");
+		CHECK(x[2].Regs[Eax] != 0 || x[2].Regs[Ecx] != 0, "store-point regs");
+	}
+	CHECK(gw.n == 2, "watch rows at the store point %d (want 2)", gw.n);
+	if (gw.n == 2)
+	{
+		CHECK(gw.rows[0].Eip == point && gw.rows[0].NewValue == 0x77, "w0 eip %08X", gw.rows[0].Eip);
+		CHECK(gw.rows[1].Eip == point && gw.rows[1].OldValue == 0x77 && gw.rows[1].NewValue == 0x78, "w1");
+	}
+	Disarm();
+	CHECK(*(const unsigned char*)point != 0xCC, "store point int3 left after disarm");
+	StoreAtPoint((volatile unsigned int*)watched, 1);   // must not trap after disarm
 	printf("VERDICT: %s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
 	return failures;
 }

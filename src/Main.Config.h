@@ -47,7 +47,7 @@ public:
 	bool MissionDump;
 	int MissionDumpMaxFrames;
 	bool WatchDump;
-	char WatchDumpTargets[256];
+	char WatchDumpTargets[1024];
 	int WatchDumpMaxFrames;
 	bool UidDump;
 	int UidDumpMaxFrames;
