@@ -46,6 +46,9 @@ public:
 	int AnimDumpMaxFrames;
 	bool MissionDump;
 	int MissionDumpMaxFrames;
+	bool WatchDump;
+	char WatchDumpTargets[256];
+	int WatchDumpMaxFrames;
 	bool HarnessProbeEnabled;
 	bool HarnessQuitOnEnd;
 	char HarnessDir[64];
@@ -93,6 +96,9 @@ public:
 		, AnimDumpMaxFrames { 0 }
 		, MissionDump { false }
 		, MissionDumpMaxFrames { 0 }
+		, WatchDump { false }
+		, WatchDumpTargets { "" }
+		, WatchDumpMaxFrames { 0 }
 		, HarnessProbeEnabled { false }
 		, HarnessQuitOnEnd { false }
 		, HarnessDir { "HARNESS" }

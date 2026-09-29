@@ -24,6 +24,7 @@
 #include <Spawner/DamageDump.h>
 #include <Spawner/HarnessProbe.h>
 #include <Spawner/MissionDump.h>
+#include <Spawner/WatchDump.h>
 #include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
 #include <Spawner/SyncPrint.h>
@@ -70,6 +71,9 @@ void MainConfig::LoadFromINIFile()
 		this->AnimDumpMaxFrames    = pINI->ReadInteger(pOptionsSection, "ANIMDUMP.MaxFrames", this->AnimDumpMaxFrames);
 		this->MissionDump          = pINI->ReadBool(pOptionsSection, "MISSIONDUMP", this->MissionDump);
 		this->MissionDumpMaxFrames = pINI->ReadInteger(pOptionsSection, "MISSIONDUMP.MaxFrames", this->MissionDumpMaxFrames);
+		this->WatchDump            = pINI->ReadBool(pOptionsSection, "WATCHDUMP", this->WatchDump);
+		pINI->ReadString(pOptionsSection, "WATCHDUMP.Targets", this->WatchDumpTargets, this->WatchDumpTargets, sizeof(this->WatchDumpTargets));
+		this->WatchDumpMaxFrames   = pINI->ReadInteger(pOptionsSection, "WATCHDUMP.MaxFrames", this->WatchDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		this->HarnessQuitOnEnd     = pINI->ReadBool(pOptionsSection, "HARNESS.QuitOnEnd", this->HarnessQuitOnEnd);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
@@ -280,6 +284,12 @@ void MainConfig::ApplyStaticOptions()
 	if (MissionDump::Enable)
 		Debug::Log("[MissionDump] Armed (MaxFrames=%d MaxRows=%ld)\n",
 			MissionDump::MaxFrames, MissionDump::MaxRows);
+
+	// WATCHDUMP=yes - log every store into the WATCHDUMP.Targets ranges with the
+	// storing EIP (Spawner/WatchDump.h). Needs Syringe --detach; arming refuses
+	// without it. WATCHDUMP.MaxFrames=<n> disarms after frame n; 0 = never.
+	if (this->WatchDump)
+		WatchDump::Arm(this->WatchDumpTargets, this->WatchDumpMaxFrames);
 
 	if (this->SingleProcAffinity)
 	{
