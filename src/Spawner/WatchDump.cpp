@@ -95,7 +95,7 @@ namespace
 		for (int i = 0; i < WatchEngine::ExecCount(); ++i)
 		{
 			const auto& x = WatchEngine::Exec(i);
-			std::fprintf(pFile, "XT=%d,%08X,%ld", i, x.Address, x.MaxHits);
+			std::fprintf(pFile, "XT=%d,%08X,%u,%ld", i, x.Address, x.Length, x.MaxHits);
 			for (int r = 0; r < x.ReadCount; ++r)
 			{
 				const auto& read = x.Reads[r];
@@ -109,7 +109,7 @@ namespace
 		std::fprintf(pFile, "COLUMNS.T=index,kind,slot,offset,length,owner\n");
 		std::fprintf(pFile, "COLUMNS.W=frame,tid,eip,fault,target,offset,old,new,c1,c2,c3,c4\n");
 		std::fprintf(pFile, "COLUMNS.F=frame,rows,neighbour,dropped\n");
-		std::fprintf(pFile, "COLUMNS.XT=index,address,maxhits,read0..read3\n");
+		std::fprintf(pFile, "COLUMNS.XT=index,address,length,maxhits,read0..read3\n");
 		std::fprintf(pFile, "COLUMNS.X=frame,tid,target,eax,ecx,edx,ebx,esp,ebp,esi,edi,s0,s1,s2,s3,then one per XT read\n");
 		std::fprintf(pFile, "COLUMNS.FX=frame,rows,dropped\n");
 		Debug::Log("[WatchDump] Opened %s\n", path);

@@ -40,8 +40,7 @@ namespace
 	constexpr int CandidateScanDwords = 256;
 	constexpr unsigned int TrapFlag = 0x100;
 	constexpr unsigned int NoFaultIndex = 0xFFFFFFFF;
-	constexpr unsigned char Int3 = 0xCC;
-	constexpr int NoExec = -1;
+	constexpr unsigned int TrampolineSlot = 64;
 
 	struct Page
 	{
@@ -73,7 +72,6 @@ namespace
 		unsigned int Pages[MaxPagesPerStep];
 		int HitCount;
 		Hit Hits[MaxHitsPerStep];
-		int Exec;                   // the exec target whose int3 this step re-plants
 	};
 
 	// + 1: the self-tests borrow the slot past a full table.
@@ -104,6 +102,7 @@ namespace
 	ExecInfo execs[MaxExecTargets + 1];
 	int execCount = 0;
 	int execSelfTestHits = 0;
+	unsigned char* trampolines = nullptr;
 	ExecRow execRing[ExecRingSize];
 	volatile LONG execRingNext = 0;
 	LONG execRingDrained = 0;
@@ -272,117 +271,11 @@ namespace
 		row.Valid = 1;
 	}
 
-	void WriteCode(unsigned int address, unsigned char value)
-	{
-		DWORD old = 0;
-		DWORD ignored = 0;
-		void* at = reinterpret_cast<void*>(address);
-		VirtualProtect(at, 1, PAGE_EXECUTE_READWRITE, &old);
-		*reinterpret_cast<volatile unsigned char*>(address) = value;
-		VirtualProtect(at, 1, old, &ignored);
-		FlushInstructionCache(GetCurrentProcess(), at, 1);
-	}
-
-	bool Readable(unsigned int address)
-	{
-		for (unsigned int probe : { address, address + 3 })
-		{
-			MEMORY_BASIC_INFORMATION mbi;
-			if (!VirtualQuery(reinterpret_cast<void*>(probe), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
-				return false;
-			if (mbi.Protect == 0 || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
-				return false;
-		}
-		return true;
-	}
-
-	int FindExec(unsigned int address)
-	{
-		for (int i = 0; i < execCount; ++i)
-			if (execs[i].Address == address && execs[i].Planted)
-				return i;
-		return NoExec;
-	}
-
-	void RecordExec(int index, const CONTEXT* context, DWORD threadId)
-	{
-		const LONG slot = InterlockedIncrement(&execRingNext) - 1;
-		if (slot >= ExecRingSize)
-		{
-			InterlockedIncrement(&execDropped);
-			return;
-		}
-		ExecRow& row = execRing[slot];
-		row.Frame = frameFn ? frameFn() : 0;
-		row.ThreadId = threadId;
-		row.Target = static_cast<unsigned int>(index);
-		row.Regs[Eax] = context->Eax;
-		row.Regs[Ecx] = context->Ecx;
-		row.Regs[Edx] = context->Edx;
-		row.Regs[Ebx] = context->Ebx;
-		row.Regs[Esp] = context->Esp;
-		row.Regs[Ebp] = context->Ebp;
-		row.Regs[Esi] = context->Esi;
-		row.Regs[Edi] = context->Edi;
-		for (int i = 0; i < ExecStackDwords; ++i)
-		{
-			const unsigned int at = context->Esp + 4 * i;
-			row.Stack[i] = Readable(at) ? *reinterpret_cast<const unsigned int*>(at) : 0;
-		}
-		const ExecInfo& exec = execs[index];
-		row.ReadOk = 0;
-		for (int r = 0; r < exec.ReadCount; ++r)
-		{
-			const ReadSpec& read = exec.Reads[r];
-			unsigned int value = row.Regs[read.Base];
-			bool ok = true;
-			for (int s = 0; s < read.Steps && ok; ++s)
-			{
-				const unsigned int at = value + static_cast<unsigned int>(read.Offsets[s]);
-				ok = Readable(at);
-				value = ok ? *reinterpret_cast<const unsigned int*>(at) : 0;
-			}
-			row.Reads[r] = value;
-			if (ok)
-				row.ReadOk |= 1u << r;
-		}
-		MemoryBarrier();
-		row.Valid = 1;
-	}
-
 	LONG CALLBACK Handler(EXCEPTION_POINTERS* info)
 	{
 		const EXCEPTION_RECORD* record = info->ExceptionRecord;
 		CONTEXT* context = info->ContextRecord;
 		const DWORD threadId = GetCurrentThreadId();
-
-		if (record->ExceptionCode == EXCEPTION_BREAKPOINT)
-		{
-			// Windows reports the int3's own address; accept the byte after it
-			// too, and set Eip explicitly, so either convention resumes at ADDR.
-			const unsigned int at = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(record->ExceptionAddress));
-			Lock();
-			int index = FindExec(at);
-			if (index == NoExec)
-				index = FindExec(at - 1);
-			Pending* p = index != NoExec ? FindPending(threadId, true) : nullptr;
-			if (!p || p->Exec != NoExec)
-			{
-				Unlock();
-				return EXCEPTION_CONTINUE_SEARCH;
-			}
-			ExecInfo& exec = execs[index];
-			RecordExec(index, context, threadId);
-			++exec.Hits;
-			WriteCode(exec.Address, exec.Original);
-			exec.Planted = false;
-			p->Exec = index;
-			Unlock();
-
-			context->Eip = exec.Address;
-			context->EFlags |= TrapFlag;
-			return EXCEPTION_CONTINUE_EXECUTION;
-		}
 
 		if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
 		{
@@ -441,20 +334,10 @@ namespace
 		{
 			Lock();
 			Pending* p = FindPending(threadId, false);
-			if (!p || (p->PageCount == 0 && p->Exec == NoExec))
+			if (!p || p->PageCount == 0)
 			{
 				Unlock();
 				return EXCEPTION_CONTINUE_SEARCH;
-			}
-			if (p->Exec != NoExec)
-			{
-				ExecInfo& exec = execs[p->Exec];
-				if (handler && (exec.MaxHits == 0 || exec.Hits < exec.MaxHits))
-				{
-					WriteCode(exec.Address, Int3);
-					exec.Planted = true;
-				}
-				p->Exec = NoExec;
 			}
 			for (int i = 0; i < p->HitCount; ++i)
 			{
@@ -512,6 +395,143 @@ namespace
 			}
 		}
 		return false;
+	}
+
+	// Exec targets ------------------------------------------------------------
+
+	void WriteCode(unsigned int address, const unsigned char* bytes, unsigned int length)
+	{
+		DWORD old = 0;
+		DWORD ignored = 0;
+		void* at = reinterpret_cast<void*>(address);
+		VirtualProtect(at, length, PAGE_EXECUTE_READWRITE, &old);
+		std::memcpy(at, bytes, length);
+		VirtualProtect(at, length, old, &ignored);
+		FlushInstructionCache(GetCurrentProcess(), at, length);
+	}
+
+	bool Readable(unsigned int address)
+	{
+		for (unsigned int probe : { address, address + 3 })
+		{
+			MEMORY_BASIC_INFORMATION mbi;
+			if (!VirtualQuery(reinterpret_cast<void*>(probe), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+				return false;
+			if (mbi.Protect == 0 || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+				return false;
+		}
+		return true;
+	}
+
+	void Put32(unsigned char* at, unsigned int value)
+	{
+		std::memcpy(at, &value, 4);
+	}
+
+	// Called from a trampoline with the pushad frame: EDI, ESI, EBP, ESP,
+	// EBX, EDX, ECX, EAX, then the pushfd'd flags. pushad saved the ESP it
+	// saw after pushfd, so ADDR's ESP is that plus 4.
+	void __cdecl LogPass(int index, const unsigned int* frame)
+	{
+		ExecInfo& exec = execs[index];
+		const long hits = InterlockedIncrement(&exec.Hits);
+		if (exec.MaxHits > 0 && hits > exec.MaxHits)
+			return;
+		const LONG slot = InterlockedIncrement(&execRingNext) - 1;
+		if (slot >= ExecRingSize)
+		{
+			InterlockedIncrement(&execDropped);
+			return;
+		}
+		ExecRow& row = execRing[slot];
+		row.Frame = frameFn ? frameFn() : 0;
+		row.ThreadId = GetCurrentThreadId();
+		row.Target = static_cast<unsigned int>(index);
+		row.Regs[Edi] = frame[0];
+		row.Regs[Esi] = frame[1];
+		row.Regs[Ebp] = frame[2];
+		row.Regs[Esp] = frame[3] + 4;
+		row.Regs[Ebx] = frame[4];
+		row.Regs[Edx] = frame[5];
+		row.Regs[Ecx] = frame[6];
+		row.Regs[Eax] = frame[7];
+		for (int i = 0; i < ExecStackDwords; ++i)
+		{
+			const unsigned int at = row.Regs[Esp] + 4 * i;
+			row.Stack[i] = Readable(at) ? *reinterpret_cast<const unsigned int*>(at) : 0;
+		}
+		row.ReadOk = 0;
+		for (int r = 0; r < exec.ReadCount; ++r)
+		{
+			const ReadSpec& read = exec.Reads[r];
+			unsigned int value = row.Regs[read.Base];
+			bool ok = true;
+			for (int s = 0; s < read.Steps && ok; ++s)
+			{
+				const unsigned int at = value + static_cast<unsigned int>(read.Offsets[s]);
+				ok = Readable(at);
+				value = ok ? *reinterpret_cast<const unsigned int*>(at) : 0;
+			}
+			row.Reads[r] = value;
+			if (ok)
+				row.ReadOk |= 1u << r;
+		}
+		MemoryBarrier();
+		row.Valid = 1;
+	}
+
+	// Builds exec target `index`'s trampoline in its slot and writes the jmp
+	// over ADDR. Returns false with ADDR untouched when it cannot.
+	bool Plant(int index)
+	{
+		ExecInfo& exec = execs[index];
+		unsigned char* t = trampolines + TrampolineSlot * index;
+		const unsigned int tAddress = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(t));
+		std::memcpy(exec.Original, reinterpret_cast<const void*>(exec.Address), exec.Length);
+		DWORD ignored = 0;
+		VirtualProtect(t, TrampolineSlot, PAGE_EXECUTE_READWRITE, &ignored);
+
+		unsigned int n = 0;
+		t[n++] = 0x9C;                                  // pushfd
+		t[n++] = 0x60;                                  // pushad
+		t[n++] = 0xFC;                                  // cld
+		t[n++] = 0x54;                                  // push esp
+		t[n++] = 0x68; Put32(t + n, static_cast<unsigned int>(index)); n += 4;  // push index
+		const unsigned int logPass = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(&LogPass));
+		t[n++] = 0xE8; Put32(t + n, logPass - (tAddress + n + 4)); n += 4;      // call LogPass
+		t[n++] = 0x83; t[n++] = 0xC4; t[n++] = 0x08;   // add esp, 8
+		t[n++] = 0x61;                                  // popad
+		t[n++] = 0x9D;                                  // popfd
+		std::memcpy(t + n, exec.Original, exec.Length); n += exec.Length;
+		const unsigned int back = exec.Address + exec.Length;
+		t[n++] = 0xE9; Put32(t + n, back - (tAddress + n + 4)); n += 4;         // jmp ADDR+LEN
+		// Never execute a page that is still writable: Rosetta does not survive it.
+		VirtualProtect(t, TrampolineSlot, PAGE_EXECUTE_READ, &ignored);
+		FlushInstructionCache(GetCurrentProcess(), t, n);
+		exec.Trampoline = tAddress;
+
+		unsigned char patch[MaxExecLength];
+		std::memset(patch, 0x90, sizeof(patch));
+		patch[0] = 0xE9;
+		Put32(patch + 1, tAddress - (exec.Address + 5));
+		WriteCode(exec.Address, patch, exec.Length);
+		exec.Planted = true;
+		return true;
+	}
+
+	void Unplant(ExecInfo& exec)
+	{
+		if (exec.Planted)
+			WriteCode(exec.Address, exec.Original, exec.Length);
+		exec.Planted = false;
+	}
+
+	// A relative operand in the first instruction would jump from the wrong
+	// place once copied. Only the first byte is checked; LEN is the caller's.
+	bool RelativeFirst(unsigned char op, unsigned char next)
+	{
+		return op == 0xE8 || op == 0xE9 || op == 0xEB || (op >= 0x70 && op <= 0x7F)
+			|| (op >= 0xE0 && op <= 0xE3) || (op == 0x0F && next >= 0x80 && next <= 0x8F);
 	}
 
 	bool ParseHex(const char*& cursor, unsigned int* out)
@@ -584,6 +604,14 @@ namespace
 			std::snprintf(err, errLen, "bad exec address at \"%s\"", start);
 			return false;
 		}
+		char* end = nullptr;
+		const unsigned long length = *cursor == '@' ? std::strtoul(cursor + 1, &end, 10) : 0;
+		if (!end || length < MinExecLength || length > MaxExecLength)
+		{
+			std::snprintf(err, errLen, "exec target \"%s\" needs @LEN, decimal from %u to %u", start, MinExecLength, MaxExecLength);
+			return false;
+		}
+		cursor = end;
 		MEMORY_BASIC_INFORMATION mbi;
 		const DWORD executable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 		if (!VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT
@@ -592,9 +620,15 @@ namespace
 			std::snprintf(err, errLen, "exec target \"%s\" is not committed executable memory", start);
 			return false;
 		}
-		if (address >= ownTextLow && address < ownTextHigh)
+		if (address + length > ownTextLow && address < ownTextHigh)
 		{
 			std::snprintf(err, errLen, "exec target \"%s\" is in the spawner's own code", start);
+			return false;
+		}
+		const unsigned char* code = reinterpret_cast<const unsigned char*>(address);
+		if (RelativeFirst(code[0], code[1]))
+		{
+			std::snprintf(err, errLen, "exec target \"%s\" starts with a relative branch (or a Syringe hook's jmp)", start);
 			return false;
 		}
 		if (execCount == MaxExecTargets)
@@ -604,14 +638,15 @@ namespace
 		}
 		for (int i = 0; i < execCount; ++i)
 		{
-			if (execs[i].Address == address)
+			if (address < execs[i].Address + execs[i].Length && execs[i].Address < address + length)
 			{
-				std::snprintf(err, errLen, "exec target \"%s\" given twice", start);
+				std::snprintf(err, errLen, "exec target \"%s\" overlaps exec target %d", start, i);
 				return false;
 			}
 		}
 		ExecInfo exec = {};
 		exec.Address = address;
+		exec.Length = static_cast<unsigned int>(length);
 		while (*cursor == '/')
 		{
 			++cursor;
@@ -623,14 +658,14 @@ namespace
 		}
 		if (*cursor == '#')
 		{
-			char* end = nullptr;
-			exec.MaxHits = std::strtol(cursor + 1, &end, 10);
-			if (end == cursor + 1 || exec.MaxHits <= 0)
+			char* hitsEnd = nullptr;
+			exec.MaxHits = std::strtol(cursor + 1, &hitsEnd, 10);
+			if (hitsEnd == cursor + 1 || exec.MaxHits <= 0)
 			{
 				std::snprintf(err, errLen, "exec target \"%s\": #MAXHITS must be a positive decimal", start);
 				return false;
 			}
-			cursor = end;
+			cursor = hitsEnd;
 		}
 		execs[execCount++] = exec;
 		return true;
@@ -735,28 +770,10 @@ namespace
 		return hits;
 	}
 
-	bool Plant(ExecInfo& exec)
-	{
-		exec.Original = *reinterpret_cast<const unsigned char*>(exec.Address);
-		if (exec.Original == Int3)
-			return false;
-		WriteCode(exec.Address, Int3);
-		exec.Planted = true;
-		return true;
-	}
-
-	void Unplant(ExecInfo& exec)
-	{
-		if (exec.Planted)
-			WriteCode(exec.Address, exec.Original);
-		exec.Planted = false;
-	}
-
-	// Two calls through a planted probe: the first proves the breakpoint is
-	// delivered, the second that the single-step re-planted it. The argument
-	// read back through `esp+4` proves the stack and the read chain. The probe
-	// is a stub on its own page: under Wine on Apple Silicon a code write to
-	// the page the writer is running on kills the process.
+	// Two calls through a planted probe: each must log a row whose `esp+4`
+	// read is its argument, and return what the unhooked probe returns. The
+	// probe is a stub on its own page: under Wine on Apple Silicon a code
+	// write to the page the writing code runs on kills the process.
 	int RunExecSelfTest()
 	{
 		if (execCount >= static_cast<int>(sizeof(execs) / sizeof(execs[0])))
@@ -770,24 +787,25 @@ namespace
 		DWORD ignored = 0;
 		VirtualProtect(page, PageSize, PAGE_EXECUTE_READ, &ignored);
 		FlushInstructionCache(GetCurrentProcess(), page, sizeof(stub));
-		const auto execProbe = reinterpret_cast<int(__cdecl*)(int)>(page);
+		const auto probe = reinterpret_cast<int(__cdecl*)(int)>(page);
 
-		ExecInfo& exec = execs[execCount];
+		const int index = execCount++;
+		ExecInfo& exec = execs[index];
 		exec = {};
 		exec.Address = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(page));
+		exec.Length = 8;
 		exec.ReadCount = 1;
 		exec.Reads[0] = { Esp, 1, { 4 } };
-		++execCount;
 		int hits = 0;
-		if (Plant(exec))
+		if (Plant(index))
 		{
-			const int first = execProbe(0x5A);
-			const int second = execProbe(0xA5);
+			const int first = probe(0x5A);
+			const int second = probe(0xA5);
 			const LONG end = execRingNext < ExecRingSize ? execRingNext : ExecRingSize;
 			for (LONG i = 0; i < end; ++i)
 			{
 				const ExecRow& row = execRing[i];
-				if (!row.Valid || row.Target != static_cast<unsigned int>(execCount - 1) || !(row.ReadOk & 1))
+				if (!row.Valid || row.Target != static_cast<unsigned int>(index) || !(row.ReadOk & 1))
 					continue;
 				if ((hits == 0 && row.Reads[0] == 0x5A && row.Stack[1] == 0x5A) || (hits == 1 && row.Reads[0] == 0xA5))
 					++hits;
@@ -812,7 +830,6 @@ namespace
 			p.Owner = 0;
 			p.PageCount = 0;
 			p.HitCount = 0;
-			p.Exec = NoExec;
 		}
 	}
 }
@@ -864,32 +881,22 @@ bool Arm(const char* spec, FrameFn frame, char* err, unsigned int errLen)
 	}
 
 	frameFn = frame;
-	ResetPending();
-	handler = AddVectoredExceptionHandler(1, Handler);
-	if (!handler)
+	if (targetCount > 0)
 	{
-		std::snprintf(err, errLen, "AddVectoredExceptionHandler failed");
-		targetCount = 0;
-		return false;
-	}
-
-	selfTestHits = RunSelfTest();
-	if (selfTestHits != 2)
-	{
-		std::snprintf(err, errLen, "self-test recorded %d of 2 stores; launch Syringe with --detach", selfTestHits);
-		RemoveVectoredExceptionHandler(handler);
-		handler = nullptr;
 		ResetPending();
-		targetCount = 0;
-		execCount = 0;
-		return false;
-	}
-	if (execCount > 0)
-	{
-		execSelfTestHits = RunExecSelfTest();
-		if (execSelfTestHits != 2)
+		handler = AddVectoredExceptionHandler(1, Handler);
+		if (!handler)
 		{
-			std::snprintf(err, errLen, "exec self-test recorded %d of 2 calls; launch Syringe with --detach", execSelfTestHits);
+			std::snprintf(err, errLen, "AddVectoredExceptionHandler failed");
+			targetCount = 0;
+			execCount = 0;
+			return false;
+		}
+
+		selfTestHits = RunSelfTest();
+		if (selfTestHits != 2)
+		{
+			std::snprintf(err, errLen, "self-test recorded %d of 2 stores; launch Syringe with --detach", selfTestHits);
 			RemoveVectoredExceptionHandler(handler);
 			handler = nullptr;
 			ResetPending();
@@ -899,17 +906,25 @@ bool Arm(const char* spec, FrameFn frame, char* err, unsigned int errLen)
 		}
 	}
 
-	Lock();
-	for (int e = 0; e < execCount; ++e)
+	if (execCount > 0)
 	{
-		if (!Plant(execs[e]))
+		if (!trampolines)
+			trampolines = static_cast<unsigned char*>(VirtualAlloc(nullptr, TrampolineSlot * (MaxExecTargets + 1),
+				MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		execSelfTestHits = trampolines ? RunExecSelfTest() : 0;
+		if (execSelfTestHits != 2)
 		{
-			Unlock();
-			std::snprintf(err, errLen, "exec target %d at %08X already holds an int3", e, execs[e].Address);
+			std::snprintf(err, errLen, "exec self-test recorded %d of 2 calls", execSelfTestHits);
 			Disarm();
+			targetCount = 0;
+			execCount = 0;
 			return false;
 		}
+		for (int e = 0; e < execCount; ++e)
+			Plant(e);
 	}
+
+	Lock();
 	for (int t = 0; t < targetCount; ++t)
 	{
 		if (targets[t].Kind == TargetKind::Deref)
@@ -929,6 +944,8 @@ bool Arm(const char* spec, FrameFn frame, char* err, unsigned int errLen)
 
 void Disarm()
 {
+	for (int e = 0; e < execCount; ++e)
+		Unplant(execs[e]);
 	Lock();
 	for (int i = 0; i < pageCount; ++i)
 	{
@@ -936,8 +953,6 @@ void Disarm()
 		VirtualProtect(reinterpret_cast<void*>(pages[i].Base), PageSize, pages[i].Original, &ignored);
 	}
 	pageCount = 0;
-	for (int e = 0; e < execCount; ++e)
-		Unplant(execs[e]);
 	ResetPending();
 	Unlock();
 	if (handler)
