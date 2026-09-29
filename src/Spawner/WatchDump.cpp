@@ -80,7 +80,9 @@ namespace
 
 		std::fprintf(pFile, "WATCHDUMP=1\n");
 		std::fprintf(pFile, "SEED=%08X\n", seed);
-		std::fprintf(pFile, "SELFTEST=%d of 2\n", WatchEngine::SelfTestHits());
+		// An exec-only spec takes no trap, so the store self-test does not run.
+		if (WatchEngine::TargetCount() > 0)
+			std::fprintf(pFile, "SELFTEST=%d of 2\n", WatchEngine::SelfTestHits());
 		std::fprintf(pFile, "TEXT=%08X-%08X\n", WatchEngine::TextLow(), WatchEngine::TextHigh());
 		for (int i = 0; i < WatchEngine::TargetCount(); ++i)
 		{
