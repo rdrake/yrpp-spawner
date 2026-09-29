@@ -65,6 +65,7 @@
     <ClCompile Include="$(ThisDir)\src\Spawner\Statistics.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\AnimDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\MissionDump.cpp" />
+    <ClCompile Include="$(ThisDir)\src\Spawner\UidDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\WatchDump.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\WatchEngine.cpp" />
     <ClCompile Include="$(ThisDir)\src\Spawner\AstarDump.cpp" />
@@ -138,6 +139,7 @@
     <ClInclude Include="$(ThisDir)\src\Spawner\Spawner.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\AnimDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\MissionDump.h" />
+    <ClInclude Include="$(ThisDir)\src\Spawner\UidDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\WatchDump.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\WatchEngine.h" />
     <ClInclude Include="$(ThisDir)\src\Spawner\AstarDump.h" />
