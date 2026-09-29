@@ -103,6 +103,10 @@ namespace WatchEngine
 	long Dropped();
 	long NeighbourTraps();
 
+	// Up to MaxCandidates stack dwords from `sp` upward that sit inside the
+	// game's .text and follow a call instruction, nearest first. Needs no Arm.
+	void ReturnCandidates(unsigned int sp, unsigned int* out);
+
 	// Calls `emit` for each completed row in record order and frees their
 	// storage. Returns the number emitted.
 	int Drain(void(__cdecl* emit)(const Row& row, void* ctx), void* ctx);

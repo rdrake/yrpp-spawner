@@ -205,13 +205,12 @@ namespace
 		return false;
 	}
 
-	void CollectCandidates(const CONTEXT* context, unsigned int* out)
+	void ScanCandidates(unsigned int sp, unsigned int* out)
 	{
 		for (int i = 0; i < MaxCandidates; ++i)
 			out[i] = 0;
 		const NT_TIB* tib = reinterpret_cast<const NT_TIB*>(NtCurrentTeb());
 		const unsigned int top = static_cast<unsigned int>(reinterpret_cast<uintptr_t>(tib->StackBase));
-		unsigned int sp = context->Esp;
 		int found = 0;
 		for (int i = 0; i < CandidateScanDwords && found < MaxCandidates && sp + 4 <= top; ++i, sp += 4)
 		{
@@ -302,7 +301,7 @@ namespace
 				for (unsigned int d = 0; d < dwords; ++d)
 					hit.Snapshot[d] = reinterpret_cast<volatile unsigned int*>(target.Resolved)[d];
 				hit.Eip = context->Eip;
-				CollectCandidates(context, hit.Candidates);
+				ScanCandidates(context->Esp, hit.Candidates);
 			}
 			if (!matched)
 				InterlockedIncrement(&neighbour);
@@ -603,6 +602,13 @@ unsigned int TextLow() { return textLow; }
 unsigned int TextHigh() { return textHigh; }
 long Dropped() { return dropped; }
 long NeighbourTraps() { return neighbour; }
+
+void ReturnCandidates(unsigned int sp, unsigned int* out)
+{
+	if (!textHigh)
+		ModuleRange(GetModuleHandleA(nullptr), &textLow, &textHigh, true);
+	ScanCandidates(sp, out);
+}
 
 int Drain(void(__cdecl* emit)(const Row& row, void* ctx), void* ctx)
 {

@@ -25,6 +25,7 @@
 #include <Spawner/HarnessProbe.h>
 #include <Spawner/MissionDump.h>
 #include <Spawner/WatchDump.h>
+#include <Spawner/UidDump.h>
 #include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
 #include <Spawner/SyncPrint.h>
@@ -74,6 +75,8 @@ void MainConfig::LoadFromINIFile()
 		this->WatchDump            = pINI->ReadBool(pOptionsSection, "WATCHDUMP", this->WatchDump);
 		pINI->ReadString(pOptionsSection, "WATCHDUMP.Targets", this->WatchDumpTargets, this->WatchDumpTargets, sizeof(this->WatchDumpTargets));
 		this->WatchDumpMaxFrames   = pINI->ReadInteger(pOptionsSection, "WATCHDUMP.MaxFrames", this->WatchDumpMaxFrames);
+		this->UidDump              = pINI->ReadBool(pOptionsSection, "UIDDUMP", this->UidDump);
+		this->UidDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "UIDDUMP.MaxFrames", this->UidDumpMaxFrames);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		this->HarnessQuitOnEnd     = pINI->ReadBool(pOptionsSection, "HARNESS.QuitOnEnd", this->HarnessQuitOnEnd);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
@@ -290,6 +293,13 @@ void MainConfig::ApplyStaticOptions()
 	// without it. WATCHDUMP.MaxFrames=<n> disarms after frame n; 0 = never.
 	if (this->WatchDump)
 		WatchDump::Arm(this->WatchDumpTargets, this->WatchDumpMaxFrames);
+
+	// UIDDUMP=yes - every UniqueID draw with its caller and object
+	// (Spawner/UidDump.h). UIDDUMP.MaxFrames=<n> stops past frame n; 0 = never.
+	UidDump::Enable = this->UidDump;
+	UidDump::MaxFrames = this->UidDumpMaxFrames;
+	if (UidDump::Enable)
+		Debug::Log("[UidDump] Armed (MaxFrames=%d MaxRows=%ld)\n", UidDump::MaxFrames, UidDump::MaxRows);
 
 	if (this->SingleProcAffinity)
 	{

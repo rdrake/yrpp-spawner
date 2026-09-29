@@ -49,6 +49,8 @@ public:
 	bool WatchDump;
 	char WatchDumpTargets[256];
 	int WatchDumpMaxFrames;
+	bool UidDump;
+	int UidDumpMaxFrames;
 	bool HarnessProbeEnabled;
 	bool HarnessQuitOnEnd;
 	char HarnessDir[64];
@@ -99,6 +101,8 @@ public:
 		, WatchDump { false }
 		, WatchDumpTargets { "" }
 		, WatchDumpMaxFrames { 0 }
+		, UidDump { false }
+		, UidDumpMaxFrames { 0 }
 		, HarnessProbeEnabled { false }
 		, HarnessQuitOnEnd { false }
 		, HarnessDir { "HARNESS" }
