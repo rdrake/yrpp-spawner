@@ -28,6 +28,7 @@
 #include <GeneralDefinitions.h>
 #include <InfantryTypeClass.h>
 #include <InfantryClass.h>
+#include <UnitTypeClass.h>
 #include <TechnoTypeClass.h>
 #include <MapClass.h>
 #include <RulesClass.h>
@@ -318,11 +319,12 @@ SpawnResult HarnessOrders::Spawn(const char* typeName, int cellX, int cellY, uns
 	if (!MapClass::Instance.CellExists(cell))
 		return SpawnResult::BadCell;
 
-	// INFANTRY ONLY (HarnessOrders.h). A name that resolves to some OTHER
-	// real TechnoTypeClass (a vehicle, aircraft, building ID) is a distinct,
-	// explicit rejection - never a silent attempt through an unpinned
-	// construction-time array.
-	InfantryTypeClass* pType = InfantryTypeClass::Find(typeName);
+	// INFANTRY AND UNITS ONLY (HarnessOrders.h). A name that resolves to some
+	// OTHER real TechnoTypeClass (an aircraft or building ID) is a distinct,
+	// explicit rejection.
+	TechnoTypeClass* pType = InfantryTypeClass::Find(typeName);
+	if (!pType)
+		pType = UnitTypeClass::Find(typeName);
 	if (!pType)
 	{
 		if (TechnoTypeClass::Find(typeName))
@@ -330,13 +332,14 @@ SpawnResult HarnessOrders::Spawn(const char* typeName, int cellX, int cellY, uns
 		return SpawnResult::UnknownType;
 	}
 
-	// Allocation + the full construction chain: InfantryTypeClass::CreateObject
-	// (pinned 0x00523B10) -> InfantryClass ctor (0x00517A50) -> FootClass
-	// (0x004D31E0) -> TechnoClass (0x006F2B40), which writes Owner (+0x21C) and
-	// appends unconditionally to the three construction-time arrays before
-	// this call returns (object-creation-teardown.md Sec.1, Sec.3). No
-	// rollback needed on failure here - allocation failure leaves no trace
-	// (same note, the table's first row).
+	// Allocation + the full construction chain, the factory's own CreateObject:
+	// InfantryTypeClass::CreateObject (0x00523B10) -> InfantryClass ctor
+	// (0x00517A50), or UnitTypeClass::CreateObject (slot 35, 0x0074757c call)
+	// -> UnitClass ctor (0x007353C0, which appends to the Unit array); both
+	// reach FootClass (0x004D31E0) -> TechnoClass (0x006F2B40), which writes
+	// Owner (+0x21C) and appends to the construction-time arrays before this
+	// call returns (object-creation-teardown.md Sec.1, Sec.3). Allocation
+	// failure leaves no trace (same note, the table's first row).
 	ObjectClass* pObj = pType->CreateObject(pPlayer);
 	if (!pObj)
 		return SpawnResult::AllocationFailed;
