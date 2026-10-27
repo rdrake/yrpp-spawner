@@ -78,11 +78,11 @@ enum class OrderResult
 // specs/notes/object-creation-teardown.md (Task 9). Two of that note's
 // findings shape this directly:
 //
-//  1. INFANTRY ONLY. Only InfantryClass's construction chain was traced end
-//     to end; UnitClass/AircraftClass have a class-specific construction-time
-//     array (the note's Sec.3.3) that was never pinned. A type name that
-//     resolves to a real, non-infantry TechnoTypeClass is UnsupportedType -
-//     an explicit rejection, never a guess at an unpinned layout.
+//  1. INFANTRY AND UNITS ONLY. InfantryClass's construction chain was traced
+//     end to end, and UnitClass's array append is pinned since (ratwo
+//     specs/UnitClass__ctor_0x007353c0.md); AircraftClass's never was. An
+//     aircraft or building type name is UnsupportedType - an explicit
+//     rejection, never a guess at an unpinned layout.
 //
 //  2. NO STABLE ENGINE UID. TechnoClass::Array's index is NOT a stable
 //     identity - RemoveIndex (0x0063F000) is a shift-compaction, so every
@@ -117,7 +117,8 @@ public:
 	// Order the unit identified by `uid` to move to map cell (cellX, cellY).
 	static OrderResult Move(unsigned int uid, int cellX, int cellY);
 
-	// Spawn an InfantryClass of `typeName` (a rules.ini ID, e.g. "E1"), owned
+	// Spawn an InfantryClass or UnitClass of `typeName` (a rules.ini ID, e.g.
+	// "E1", "MTNK", "DEST"; a ship needs a water cell), owned
 	// by HouseClass::CurrentPlayer, unlimboed at map cell (cellX, cellY). On
 	// SpawnResult::Ok, `*outUid` receives the new object's
 	// AbstractClass::UniqueID - the harness's label binding for it.
