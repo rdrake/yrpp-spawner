@@ -26,6 +26,7 @@
 #include <Spawner/MissionDump.h>
 #include <Spawner/WatchDump.h>
 #include <Spawner/UidDump.h>
+#include <Spawner/ProbeDump.h>
 #include <Spawner/RngDump.h>
 #include <Spawner/SyncDump.h>
 #include <Spawner/SyncPrint.h>
@@ -77,6 +78,10 @@ void MainConfig::LoadFromINIFile()
 		this->WatchDumpMaxFrames   = pINI->ReadInteger(pOptionsSection, "WATCHDUMP.MaxFrames", this->WatchDumpMaxFrames);
 		this->UidDump              = pINI->ReadBool(pOptionsSection, "UIDDUMP", this->UidDump);
 		this->UidDumpMaxFrames     = pINI->ReadInteger(pOptionsSection, "UIDDUMP.MaxFrames", this->UidDumpMaxFrames);
+		this->ProbeDump            = pINI->ReadBool(pOptionsSection, "PROBEDUMP", this->ProbeDump);
+		this->ProbeDumpFirst       = pINI->ReadInteger(pOptionsSection, "PROBEDUMP.First", this->ProbeDumpFirst);
+		this->ProbeDumpLast        = pINI->ReadInteger(pOptionsSection, "PROBEDUMP.Last", this->ProbeDumpLast);
+		this->ProbeDumpScanner     = pINI->ReadInteger(pOptionsSection, "PROBEDUMP.Scanner", this->ProbeDumpScanner);
 		this->HarnessProbeEnabled  = pINI->ReadBool(pOptionsSection, "HARNESS.Probe", this->HarnessProbeEnabled);
 		this->HarnessQuitOnEnd     = pINI->ReadBool(pOptionsSection, "HARNESS.QuitOnEnd", this->HarnessQuitOnEnd);
 		pINI->ReadString(pOptionsSection, "HARNESS.Dir", this->HarnessDir, this->HarnessDir, sizeof(this->HarnessDir));
@@ -300,6 +305,15 @@ void MainConfig::ApplyStaticOptions()
 	UidDump::MaxFrames = this->UidDumpMaxFrames;
 	if (UidDump::Enable)
 		Debug::Log("[UidDump] Armed (MaxFrames=%d MaxRows=%ld)\n", UidDump::MaxFrames, UidDump::MaxRows);
+
+	// PROBEDUMP=yes - the threat-scan probe (Spawner/ProbeDump.h) for frames
+	// PROBEDUMP.First..PROBEDUMP.Last and scanner UniqueID PROBEDUMP.Scanner (0 = all).
+	ProbeDump::Enable = this->ProbeDump;
+	ProbeDump::First = this->ProbeDumpFirst;
+	ProbeDump::Last = this->ProbeDumpLast;
+	ProbeDump::Scanner = static_cast<unsigned int>(this->ProbeDumpScanner);
+	if (ProbeDump::Enable)
+		Debug::Log("[ProbeDump] Armed (frames %d..%d scanner %u MaxRows=%ld)\n", ProbeDump::First, ProbeDump::Last, ProbeDump::Scanner, ProbeDump::MaxRows);
 
 	if (this->SingleProcAffinity)
 	{
