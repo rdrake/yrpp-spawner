@@ -21,6 +21,8 @@
 
 #include <AbstractClass.h>
 #include <AbstractTypeClass.h>
+#include <FootClass.h>
+#include <TechnoClass.h>
 #include <TechnoTypeClass.h>
 #include <ObjectClass.h>
 #include <Helpers/Macro.h>
