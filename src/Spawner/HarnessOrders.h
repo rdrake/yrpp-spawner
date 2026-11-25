@@ -133,6 +133,27 @@ struct SuperState
 	int TimeLeft;
 };
 
+// The production verbs: produce, suspend, abandon, place, build-state.
+enum class ProdResult
+{
+	Ok,
+	NotSinglePlayer,
+	NoPlayerHouse,
+	UnknownType,
+	BadCell,
+	QueueFull,
+	NoFactory,
+};
+
+// The player's factory building an object of a type, read back for the ack.
+struct BuildState
+{
+	int Progress;
+	bool OnHold;
+	bool Suspended;
+	unsigned int Uid;
+};
+
 class HarnessOrders
 {
 public:
@@ -217,6 +238,30 @@ public:
 
 	// `sw-state <SWTYPE>`: read-only. `*state` receives the weapon's fields.
 	static SwResult State(const char* typeName, SuperState* state);
+
+	// `produce|suspend|abandon <TYPE>`: a Produce, Suspend or Abandon event,
+	// the 0x4C6970 constructor (house, type, rtti, heap id, naval) a sidebar
+	// cameo click queues, with the TYPE's own rtti and heap id. Same ack rule
+	// as attack: QUEUED only.
+	static ProdResult Production(const char* typeName, EventType type);
+
+	// `place <TYPE> [x,y]`: a Place event, the 0x4C6AE0 constructor. With a
+	// cell, the object's rtti and the type's heap id, as the map click that
+	// places a finished building queues (0x4ABB55). Without one, heap id -1
+	// and cell (-1,-1), what releasing a finished unit or infantry queues.
+	static ProdResult Place(const char* typeName, bool hasCell, int cellX, int cellY);
+
+	// `build-state <TYPE>`: read-only. The first factory of the player's whose
+	// Object is a TYPE; NoFactory when none is building one.
+	static ProdResult Build(const char* typeName, BuildState* state);
+
+	static const char* ResultReason(ProdResult result);
+
+	// `sellcell <x>,<y>`: a SellCell event, the 0x4C6650 constructor.
+	static OrderResult SellCell(int cellX, int cellY);
+
+	// `guard <uid>`: a MegaMission with Mission::Guard and nothing else.
+	static OrderResult Guard(unsigned int uid);
 
 	static const char* ResultReason(SwResult result);
 

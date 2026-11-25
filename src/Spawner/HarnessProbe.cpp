@@ -103,6 +103,7 @@ namespace
 		{ "idle",    EventType::Idle,    "idle-queued",    "missing-idle-args"    },
 		{ "scatter", EventType::Scatter, "scatter-queued", "missing-scatter-args" },
 		{ "repair",  EventType::Repair,  "repair-queued",  "missing-repair-args"  },
+		{ "primary", EventType::Primary, "primary-queued",   "missing-primary-args" },
 	};
 
 	const TargetVerb* FindTargetVerb(const char* verb)
@@ -941,6 +942,122 @@ namespace
 							acked = WriteAck(id, "rejected",
 								HarnessOrders::ResultReason(result), requestedFrame, frame);
 						}
+					}
+				}
+				else if (std::strcmp(buf, "produce") == 0
+					|| std::strcmp(buf, "suspend") == 0
+					|| std::strcmp(buf, "abandon") == 0
+					|| std::strcmp(buf, "place") == 0
+					|| std::strcmp(buf, "build-state") == 0)
+				{
+					// The production verbs. All but build-state queue an event,
+					// so their `-queued` says nothing about the factory; that is
+					// read from the sync dump or a later build-state.
+					char typeBuf[64];
+					char argBuf[64];
+					const bool isPlace = std::strcmp(buf, "place") == 0;
+					const bool isState = std::strcmp(buf, "build-state") == 0;
+					bool argsOk = ReadKey(body, "type", typeBuf, sizeof(typeBuf));
+					bool hasCell = false;
+					int cellX = -1;
+					int cellY = -1;
+
+					if (isPlace && ReadKey(body, "x", argBuf, sizeof(argBuf)))
+					{
+						cellX = std::atoi(argBuf);
+						hasCell = true;
+						if (ReadKey(body, "y", argBuf, sizeof(argBuf)))
+							cellY = std::atoi(argBuf);
+						else
+							argsOk = false;
+					}
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-production-args",
+							requestedFrame, frame);
+					}
+					else if (isState)
+					{
+						BuildState st {};
+						const ProdResult result = HarnessOrders::Build(typeBuf, &st);
+						if (result == ProdResult::Ok)
+						{
+							char reason[96];
+							std::snprintf(reason, sizeof(reason),
+								"building-progress=%d-onhold=%d-suspended=%d-uid=%u",
+								st.Progress, st.OnHold, st.Suspended, st.Uid);
+							acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+						}
+						else
+						{
+							acked = WriteAck(id,
+								result == ProdResult::NoFactory ? "executed" : "rejected",
+								HarnessOrders::ResultReason(result), requestedFrame, frame);
+						}
+					}
+					else
+					{
+						const EventType type = buf[0] == 'p' && buf[1] == 'r' ? EventType::Produce
+							: buf[0] == 's' ? EventType::Suspend
+							: buf[0] == 'a' ? EventType::Abandon
+							: EventType::Place;
+						const ProdResult result = isPlace
+							? HarnessOrders::Place(typeBuf, hasCell, cellX, cellY)
+							: HarnessOrders::Production(typeBuf, type);
+						char reason[32];
+						std::snprintf(reason, sizeof(reason), "%s-queued", buf);
+						acked = WriteAck(id,
+							result == ProdResult::Ok ? "executed" : "rejected",
+							result == ProdResult::Ok ? reason : HarnessOrders::ResultReason(result),
+							requestedFrame, frame);
+					}
+				}
+				else if (std::strcmp(buf, "sellcell") == 0)
+				{
+					char argBuf[64];
+					int cellX = -1;
+					int cellY = -1;
+					bool argsOk = true;
+					if (ReadKey(body, "x", argBuf, sizeof(argBuf)))
+						cellX = std::atoi(argBuf);
+					else
+						argsOk = false;
+					if (ReadKey(body, "y", argBuf, sizeof(argBuf)))
+						cellY = std::atoi(argBuf);
+					else
+						argsOk = false;
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-sellcell-args",
+							requestedFrame, frame);
+					}
+					else
+					{
+						const OrderResult result = HarnessOrders::SellCell(cellX, cellY);
+						acked = WriteAck(id,
+							result == OrderResult::Ok ? "executed" : "rejected",
+							result == OrderResult::Ok ? "sellcell-queued" : HarnessOrders::ResultReason(result),
+							requestedFrame, frame);
+					}
+				}
+				else if (std::strcmp(buf, "guard") == 0)
+				{
+					char argBuf[64];
+					if (!ReadKey(body, "uid", argBuf, sizeof(argBuf)))
+					{
+						acked = WriteAck(id, "rejected", "missing-guard-args",
+							requestedFrame, frame);
+					}
+					else
+					{
+						const unsigned int uid = static_cast<unsigned int>(std::strtoul(argBuf, nullptr, 10));
+						const OrderResult result = HarnessOrders::Guard(uid);
+						acked = WriteAck(id,
+							result == OrderResult::Ok ? "executed" : "rejected",
+							result == OrderResult::Ok ? "guard-queued" : HarnessOrders::ResultReason(result),
+							requestedFrame, frame);
 					}
 				}
 				else if (std::strcmp(buf, "reveal") == 0)

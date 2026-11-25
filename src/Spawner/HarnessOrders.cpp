@@ -33,6 +33,8 @@
 #include <TechnoTypeClass.h>
 #include <MapClass.h>
 #include <RulesClass.h>
+#include <AircraftTypeClass.h>
+#include <FactoryClass.h>
 #include <SuperClass.h>
 #include <SuperWeaponTypeClass.h>
 
@@ -499,4 +501,200 @@ const char* HarnessOrders::ResultReason(SwResult result)
 	case SwResult::QueueFull:       return "outlist-full";
 	}
 	return "unknown";
+}
+
+namespace
+{
+	TechnoTypeClass* FindTechnoType(const char* typeName)
+	{
+		TechnoTypeClass* pType = InfantryTypeClass::Find(typeName);
+		if (!pType)
+			pType = UnitTypeClass::Find(typeName);
+		if (!pType)
+			pType = BuildingTypeClass::Find(typeName);
+		if (!pType)
+			pType = AircraftTypeClass::Find(typeName);
+		return pType;
+	}
+
+	AbstractType ObjectRtti(AbstractType typeRtti)
+	{
+		switch (typeRtti)
+		{
+		case AbstractType::BuildingType: return AbstractType::Building;
+		case AbstractType::UnitType:     return AbstractType::Unit;
+		case AbstractType::InfantryType: return AbstractType::Infantry;
+		case AbstractType::AircraftType: return AbstractType::Aircraft;
+		default:                         return typeRtti;
+		}
+	}
+
+	ProdResult ResolveProduction(const char* typeName, HouseClass** outHouse, TechnoTypeClass** outType)
+	{
+		if (!IsSinglePlayer())
+		{
+			Debug::Log("[HarnessOrders] Refusing production verb: GameMode=%d is not SP\n",
+				static_cast<int>(SessionClass::Instance.GameMode));
+			return ProdResult::NotSinglePlayer;
+		}
+
+		HouseClass* pPlayer = HouseClass::CurrentPlayer;
+		if (!pPlayer)
+			return ProdResult::NoPlayerHouse;
+
+		TechnoTypeClass* pType = FindTechnoType(typeName);
+		if (!pType)
+			return ProdResult::UnknownType;
+
+		*outHouse = pPlayer;
+		*outType = pType;
+		return ProdResult::Ok;
+	}
+}
+
+ProdResult HarnessOrders::Production(const char* typeName, EventType type)
+{
+	HouseClass* pPlayer = nullptr;
+	TechnoTypeClass* pType = nullptr;
+	const ProdResult r = ResolveProduction(typeName, &pPlayer, &pType);
+	if (r != ProdResult::Ok)
+		return r;
+
+	EventClass event(pPlayer->ArrayIndex, type,
+		static_cast<int>(pType->WhatAmI()), pType->ArrayIndex, pType->Naval);
+	event.IsExecuted = false;
+
+	if (!EventClass::OutList.Add(event))
+	{
+		Debug::Log("[HarnessOrders] OutList full; production event type=%d DROPPED\n",
+			static_cast<int>(type));
+		return ProdResult::QueueFull;
+	}
+
+	return ProdResult::Ok;
+}
+
+ProdResult HarnessOrders::Place(const char* typeName, bool hasCell, int cellX, int cellY)
+{
+	HouseClass* pPlayer = nullptr;
+	TechnoTypeClass* pType = nullptr;
+	const ProdResult r = ResolveProduction(typeName, &pPlayer, &pType);
+	if (r != ProdResult::Ok)
+		return r;
+
+	CellStruct cell { -1, -1 };
+	if (hasCell)
+	{
+		if (cellX < 0 || cellY < 0)
+			return ProdResult::BadCell;
+		cell = CellStruct { static_cast<short>(cellX), static_cast<short>(cellY) };
+		if (!MapClass::Instance.CellExists(cell))
+			return ProdResult::BadCell;
+	}
+
+	EventClass event(pPlayer->ArrayIndex, EventType::Place, ObjectRtti(pType->WhatAmI()),
+		hasCell ? pType->ArrayIndex : -1, pType->Naval, cell);
+	event.IsExecuted = false;
+
+	if (!EventClass::OutList.Add(event))
+	{
+		Debug::Log("[HarnessOrders] OutList full; place DROPPED\n");
+		return ProdResult::QueueFull;
+	}
+
+	return ProdResult::Ok;
+}
+
+ProdResult HarnessOrders::Build(const char* typeName, BuildState* state)
+{
+	HouseClass* pPlayer = nullptr;
+	TechnoTypeClass* pType = nullptr;
+	const ProdResult r = ResolveProduction(typeName, &pPlayer, &pType);
+	if (r != ProdResult::Ok)
+		return r;
+
+	for (int i = 0; i < FactoryClass::Array.Count; ++i)
+	{
+		FactoryClass* pFactory = FactoryClass::Array.GetItem(i);
+		if (!pFactory || pFactory->Owner != pPlayer || !pFactory->Object)
+			continue;
+		if (pFactory->Object->GetTechnoType() != pType)
+			continue;
+
+		state->Progress = pFactory->Production.Value;
+		state->OnHold = pFactory->OnHold;
+		state->Suspended = pFactory->IsSuspended;
+		state->Uid = pFactory->Object->UniqueID;
+		return ProdResult::Ok;
+	}
+
+	return ProdResult::NoFactory;
+}
+
+const char* HarnessOrders::ResultReason(ProdResult result)
+{
+	switch (result)
+	{
+	case ProdResult::Ok:              return "ok";
+	case ProdResult::NotSinglePlayer: return "not-single-player";
+	case ProdResult::NoPlayerHouse:   return "no-player-house";
+	case ProdResult::UnknownType:     return "unknown-type";
+	case ProdResult::BadCell:         return "bad-cell";
+	case ProdResult::QueueFull:       return "outlist-full";
+	case ProdResult::NoFactory:       return "no-factory";
+	}
+	return "unknown";
+}
+
+OrderResult HarnessOrders::SellCell(int cellX, int cellY)
+{
+	if (!IsSinglePlayer())
+		return OrderResult::NotSinglePlayer;
+
+	HouseClass* pPlayer = HouseClass::CurrentPlayer;
+	if (!pPlayer)
+		return OrderResult::NoPlayerHouse;
+
+	if (cellX < 0 || cellY < 0)
+		return OrderResult::BadCell;
+	const CellStruct cell { static_cast<short>(cellX), static_cast<short>(cellY) };
+	if (!MapClass::Instance.CellExists(cell))
+		return OrderResult::BadCell;
+
+	EventClass event(pPlayer->ArrayIndex, EventType::SellCell, cell);
+	event.IsExecuted = false;
+
+	if (!EventClass::OutList.Add(event))
+	{
+		Debug::Log("[HarnessOrders] OutList full; sellcell DROPPED\n");
+		return OrderResult::QueueFull;
+	}
+
+	return OrderResult::Ok;
+}
+
+OrderResult HarnessOrders::Guard(unsigned int uid)
+{
+	if (!IsSinglePlayer())
+		return OrderResult::NotSinglePlayer;
+
+	HouseClass* pPlayer = HouseClass::CurrentPlayer;
+	if (!pPlayer)
+		return OrderResult::NoPlayerHouse;
+
+	TechnoClass* pTechno = ResolveLive(uid);
+	if (!pTechno)
+		return OrderResult::TargetExpired;
+
+	const TargetClass src { static_cast<AbstractClass*>(pTechno) };
+	const TargetClass none {};
+	const EventClass event(pPlayer->ArrayIndex, src, Mission::Guard, none, none, none);
+
+	if (!EventClass::OutList.Add(event))
+	{
+		Debug::Log("[HarnessOrders] OutList full; guard for uid=%u DROPPED\n", uid);
+		return OrderResult::QueueFull;
+	}
+
+	return OrderResult::Ok;
 }
