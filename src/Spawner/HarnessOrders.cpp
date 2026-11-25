@@ -458,8 +458,8 @@ SwResult HarnessOrders::Fire(const char* typeName, int cellX, int cellY, SuperSt
 		return SwResult::BadCell;
 
 	ReadState(pSuper, state);
-	if (!pSuper->IsPresent)
-		return SwResult::NotPresent;
+	// No present check here: the warp half of a Chronosphere is never present,
+	// and the engine's own Execute arm decides what a SpecialPlace may launch.
 
 	// The 0x4C6B60 constructor writes Type, HouseIndex, Frame and the
 	// SpecialPlace payload; IsExecuted is set for TargetEvent's reason.
@@ -496,7 +496,6 @@ const char* HarnessOrders::ResultReason(SwResult result)
 	case SwResult::NoPlayerHouse:   return "no-player-house";
 	case SwResult::UnknownType:     return "unknown-sw-type";
 	case SwResult::BadCell:         return "bad-cell";
-	case SwResult::NotPresent:      return "sw-not-present";
 	case SwResult::QueueFull:       return "outlist-full";
 	}
 	return "unknown";
