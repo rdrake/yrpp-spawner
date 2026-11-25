@@ -1298,3 +1298,14 @@ DEFINE_HOOK(0x55DDA0, MainLoop_AfterRender__HarnessProbe, 0x5)
 	HarnessProbe::PerFrame();
 	return 0;
 }
+
+// Under the harness, on-screen messages are dropped: MessageListClass::AddMessage
+// takes its own return-null exit. Under wine the list's expiry recursion
+// (0x005D3F49 -> LinkClass::Remove) overflows the stack once a message is shown,
+// e.g. a superweapon's "detected" notice. The list is UI; no simulation state
+// reads it. 9 bytes: `mov edi, eax` and `mov eax, [esp+0x168]` after the
+// 0x4A60D0 gate call.
+DEFINE_HOOK(0x5D3BB8, MessageListClass_AddMessage__HarnessDrop, 0x9)
+{
+	return HarnessProbe::Enable ? 0x5D3BC5 : 0;
+}
