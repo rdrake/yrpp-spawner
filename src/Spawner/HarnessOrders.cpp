@@ -429,7 +429,9 @@ SwResult HarnessOrders::Grant(const char* typeName, bool ready, SuperState* stat
 	if (r != SwResult::Ok)
 		return r;
 
-	pSuper->Grant(false, false, false);
+	// one-time: HouseClass::UpdateSuperWeaponsUnfiltered takes a repeating grant
+	// back within 100 frames when no building provides it (measured, sw-probe).
+	pSuper->Grant(true, false, false);
 	if (ready)
 		pSuper->SetReadiness(true);
 

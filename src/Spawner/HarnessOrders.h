@@ -200,7 +200,8 @@ public:
 
 	// `grant <SWTYPE> [ready]`: NOT an event, like spawn. SuperClass::Grant on
 	// HouseClass::CurrentPlayer's Supers[SuperWeaponTypeClass::FindIndex],
-	// repeating (oneTime=false), unannounced, not on hold - a trigger's
+	// one-time (a repeating grant is revoked without a building), unannounced,
+	// not on hold - a trigger's
 	// "give superweapon" without a building. With `ready`, SetReadiness(true)
 	// skips the charge; without it the weapon charges over its own
 	// RechargeTime. `*state` receives the post-call SuperState.
