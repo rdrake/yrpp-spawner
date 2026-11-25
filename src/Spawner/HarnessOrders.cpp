@@ -32,6 +32,8 @@
 #include <TechnoTypeClass.h>
 #include <MapClass.h>
 #include <RulesClass.h>
+#include <SuperClass.h>
+#include <SuperWeaponTypeClass.h>
 
 namespace
 {
@@ -380,6 +382,117 @@ const char* HarnessOrders::ResultReason(SpawnResult result)
 	case SpawnResult::UnsupportedType:   return "unsupported-type";
 	case SpawnResult::AllocationFailed:  return "allocation-failed";
 	case SpawnResult::PlacementRejected: return "placement-rejected";
+	}
+	return "unknown";
+}
+
+namespace
+{
+	SwResult ResolveSuper(const char* typeName, HouseClass** outHouse, SuperClass** outSuper)
+	{
+		if (!IsSinglePlayer())
+		{
+			Debug::Log("[HarnessOrders] Refusing superweapon verb: GameMode=%d is not SP\n",
+				static_cast<int>(SessionClass::Instance.GameMode));
+			return SwResult::NotSinglePlayer;
+		}
+
+		HouseClass* pPlayer = HouseClass::CurrentPlayer;
+		if (!pPlayer)
+			return SwResult::NoPlayerHouse;
+
+		const int idx = SuperWeaponTypeClass::FindIndex(typeName);
+		if (idx < 0 || idx >= pPlayer->Supers.Count)
+			return SwResult::UnknownType;
+
+		*outHouse = pPlayer;
+		*outSuper = pPlayer->Supers.GetItem(idx);
+		return *outSuper ? SwResult::Ok : SwResult::UnknownType;
+	}
+
+	void ReadState(const SuperClass* pSuper, SuperState* state)
+	{
+		state->Index = pSuper->Type->ArrayIndex;
+		state->Present = pSuper->IsPresent;
+		state->Ready = pSuper->IsReady;
+		state->OneTime = pSuper->IsOneTime;
+		state->OnHold = pSuper->IsSuspended;
+		state->TimeLeft = pSuper->RechargeTimer.GetTimeLeft();
+	}
+}
+
+SwResult HarnessOrders::Grant(const char* typeName, bool ready, SuperState* state)
+{
+	HouseClass* pPlayer = nullptr;
+	SuperClass* pSuper = nullptr;
+	const SwResult r = ResolveSuper(typeName, &pPlayer, &pSuper);
+	if (r != SwResult::Ok)
+		return r;
+
+	pSuper->Grant(false, false, false);
+	if (ready)
+		pSuper->SetReadiness(true);
+
+	ReadState(pSuper, state);
+	return SwResult::Ok;
+}
+
+SwResult HarnessOrders::Fire(const char* typeName, int cellX, int cellY, SuperState* state)
+{
+	HouseClass* pPlayer = nullptr;
+	SuperClass* pSuper = nullptr;
+	const SwResult r = ResolveSuper(typeName, &pPlayer, &pSuper);
+	if (r != SwResult::Ok)
+		return r;
+
+	if (cellX < 0 || cellY < 0)
+		return SwResult::BadCell;
+
+	const CellStruct cell { static_cast<short>(cellX), static_cast<short>(cellY) };
+	if (!MapClass::Instance.CellExists(cell))
+		return SwResult::BadCell;
+
+	ReadState(pSuper, state);
+	if (!pSuper->IsPresent)
+		return SwResult::NotPresent;
+
+	// The 0x4C6B60 constructor writes Type, HouseIndex, Frame and the
+	// SpecialPlace payload; IsExecuted is set for TargetEvent's reason.
+	EventClass event(pPlayer->ArrayIndex, EventType::SpecialPlace, state->Index, cell);
+	event.IsExecuted = false;
+
+	if (!EventClass::OutList.Add(event))
+	{
+		Debug::Log("[HarnessOrders] OutList full; SpecialPlace sw=%d DROPPED\n", state->Index);
+		return SwResult::QueueFull;
+	}
+
+	return SwResult::Ok;
+}
+
+SwResult HarnessOrders::State(const char* typeName, SuperState* state)
+{
+	HouseClass* pPlayer = nullptr;
+	SuperClass* pSuper = nullptr;
+	const SwResult r = ResolveSuper(typeName, &pPlayer, &pSuper);
+	if (r != SwResult::Ok)
+		return r;
+
+	ReadState(pSuper, state);
+	return SwResult::Ok;
+}
+
+const char* HarnessOrders::ResultReason(SwResult result)
+{
+	switch (result)
+	{
+	case SwResult::Ok:              return "ok";
+	case SwResult::NotSinglePlayer: return "not-single-player";
+	case SwResult::NoPlayerHouse:   return "no-player-house";
+	case SwResult::UnknownType:     return "unknown-sw-type";
+	case SwResult::BadCell:         return "bad-cell";
+	case SwResult::NotPresent:      return "sw-not-present";
+	case SwResult::QueueFull:       return "outlist-full";
 	}
 	return "unknown";
 }

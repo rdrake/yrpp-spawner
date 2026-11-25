@@ -882,6 +882,67 @@ namespace
 						}
 					}
 				}
+				else if (std::strcmp(buf, "grant") == 0
+					|| std::strcmp(buf, "fire") == 0
+					|| std::strcmp(buf, "sw-state") == 0)
+				{
+					// The superweapon verbs. grant and sw-state are direct; fire
+					// queues a SpecialPlace event, so its `fire-queued` says
+					// nothing about the launch. Every ack carries the weapon's
+					// state as the verb found it (grant: after the call).
+					char typeBuf[64];
+					char argBuf[64];
+					const char verb = buf[0] == 'g' ? 'g' : (buf[0] == 'f' ? 'f' : 's');
+					int cellX = 0;
+					int cellY = 0;
+					bool ready = false;
+					bool argsOk = ReadKey(body, "type", typeBuf, sizeof(typeBuf));
+
+					if (verb == 'f')
+					{
+						if (ReadKey(body, "x", argBuf, sizeof(argBuf)))
+							cellX = std::atoi(argBuf);
+						else
+							argsOk = false;
+						if (ReadKey(body, "y", argBuf, sizeof(argBuf)))
+							cellY = std::atoi(argBuf);
+						else
+							argsOk = false;
+					}
+					else if (verb == 'g' && ReadKey(body, "ready", argBuf, sizeof(argBuf)))
+					{
+						ready = std::strcmp(argBuf, "yes") == 0;
+					}
+
+					if (!argsOk)
+					{
+						acked = WriteAck(id, "rejected", "missing-sw-args", requestedFrame, frame);
+					}
+					else
+					{
+						SuperState st {};
+						const SwResult result = verb == 'g'
+							? HarnessOrders::Grant(typeBuf, ready, &st)
+							: verb == 'f'
+								? HarnessOrders::Fire(typeBuf, cellX, cellY, &st)
+								: HarnessOrders::State(typeBuf, &st);
+
+						if (result == SwResult::Ok)
+						{
+							char reason[128];
+							std::snprintf(reason, sizeof(reason),
+								"%s-sw=%d-present=%d-ready=%d-onetime=%d-suspended=%d-left=%d",
+								verb == 'g' ? "granted" : verb == 'f' ? "fire-queued" : "state",
+								st.Index, st.Present, st.Ready, st.OneTime, st.OnHold, st.TimeLeft);
+							acked = WriteAck(id, "executed", reason, requestedFrame, frame);
+						}
+						else
+						{
+							acked = WriteAck(id, "rejected",
+								HarnessOrders::ResultReason(result), requestedFrame, frame);
+						}
+					}
+				}
 				else if (std::strcmp(buf, "reveal") == 0)
 				{
 					// MapClass::Reveal @ 0x00577D90 EARLY-OUTS when the current

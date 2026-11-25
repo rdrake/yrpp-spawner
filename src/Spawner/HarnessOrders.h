@@ -111,6 +111,29 @@ enum class SpawnResult
 	PlacementRejected,
 };
 
+// The superweapon verbs: grant, fire, sw-state.
+enum class SwResult
+{
+	Ok,
+	NotSinglePlayer,
+	NoPlayerHouse,
+	UnknownType,
+	BadCell,
+	NotPresent,
+	QueueFull,
+};
+
+// SuperClass fields read back for the ack.
+struct SuperState
+{
+	int Index;
+	bool Present;
+	bool Ready;
+	bool OneTime;
+	bool OnHold;
+	int TimeLeft;
+};
+
 class HarnessOrders
 {
 public:
@@ -174,6 +197,28 @@ public:
 	// either side of the call; a kill reads `after` as 0 with the object still
 	// in TechnoClass::Array (hazard 4 - the reap has not run yet).
 	static OrderResult Damage(unsigned int uid, int hp, int* before, int* after);
+
+	// `grant <SWTYPE> [ready]`: NOT an event, like spawn. SuperClass::Grant on
+	// HouseClass::CurrentPlayer's Supers[SuperWeaponTypeClass::FindIndex],
+	// repeating (oneTime=false), unannounced, not on hold - a trigger's
+	// "give superweapon" without a building. With `ready`, SetReadiness(true)
+	// skips the charge; without it the weapon charges over its own
+	// RechargeTime. `*state` receives the post-call SuperState.
+	static SwResult Grant(const char* typeName, bool ready, SuperState* state);
+
+	// `fire <SWTYPE> <x>,<y>`: an EventType::SpecialPlace event (the 0x4C6B60
+	// constructor: house, type, SW index, cell) - what a sidebar click and a
+	// map click queue. Same ack rule as attack: QUEUED only. Execute's arm
+	// refuses a weapon that is not present or not ready; that is read from
+	// the sync dump, not here. `*state` is read at queue time. The
+	// Chronosphere is two fires: ChronoSphereSpecial at the source, then
+	// ChronoWarpSpecial at the destination once the game has armed it.
+	static SwResult Fire(const char* typeName, int cellX, int cellY, SuperState* state);
+
+	// `sw-state <SWTYPE>`: read-only. `*state` receives the weapon's fields.
+	static SwResult State(const char* typeName, SuperState* state);
+
+	static const char* ResultReason(SwResult result);
 
 	// Ack `reason` token for a result. Never contains a space - the host parses
 	// ack lines as whitespace-separated KEY=value tokens.
