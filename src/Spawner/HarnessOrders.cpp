@@ -561,7 +561,7 @@ ProdResult HarnessOrders::Production(const char* typeName, EventType type)
 		return r;
 
 	EventClass event(pPlayer->ArrayIndex, type,
-		static_cast<int>(pType->WhatAmI()), pType->ArrayIndex, pType->Naval);
+		static_cast<int>(pType->WhatAmI()), pType->GetArrayIndex(), static_cast<BOOL>(pType->Naval));
 	event.IsExecuted = false;
 
 	if (!EventClass::OutList.Add(event))
@@ -593,7 +593,7 @@ ProdResult HarnessOrders::Place(const char* typeName, bool hasCell, int cellX, i
 	}
 
 	EventClass event(pPlayer->ArrayIndex, EventType::Place, ObjectRtti(pType->WhatAmI()),
-		hasCell ? pType->ArrayIndex : -1, pType->Naval, cell);
+		hasCell ? pType->GetArrayIndex() : -1, static_cast<int>(pType->Naval), cell);
 	event.IsExecuted = false;
 
 	if (!EventClass::OutList.Add(event))
