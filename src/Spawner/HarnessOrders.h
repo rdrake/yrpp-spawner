@@ -119,7 +119,6 @@ enum class SwResult
 	NoPlayerHouse,
 	UnknownType,
 	BadCell,
-	NotPresent,
 	QueueFull,
 };
 
