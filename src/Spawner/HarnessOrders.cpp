@@ -29,6 +29,7 @@
 #include <InfantryTypeClass.h>
 #include <InfantryClass.h>
 #include <UnitTypeClass.h>
+#include <BuildingTypeClass.h>
 #include <TechnoTypeClass.h>
 #include <MapClass.h>
 #include <RulesClass.h>
@@ -321,12 +322,14 @@ SpawnResult HarnessOrders::Spawn(const char* typeName, int cellX, int cellY, uns
 	if (!MapClass::Instance.CellExists(cell))
 		return SpawnResult::BadCell;
 
-	// INFANTRY AND UNITS ONLY (HarnessOrders.h). A name that resolves to some
-	// OTHER real TechnoTypeClass (an aircraft or building ID) is a distinct,
-	// explicit rejection.
+	// Infantry, units and buildings (a building is placed with its
+	// foundation's top-left at the cell, as a map's [Structures] entry is).
+	// An aircraft ID is a distinct, explicit rejection.
 	TechnoTypeClass* pType = InfantryTypeClass::Find(typeName);
 	if (!pType)
 		pType = UnitTypeClass::Find(typeName);
+	if (!pType)
+		pType = BuildingTypeClass::Find(typeName);
 	if (!pType)
 	{
 		if (TechnoTypeClass::Find(typeName))

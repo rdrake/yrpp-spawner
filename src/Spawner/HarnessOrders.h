@@ -140,7 +140,7 @@ public:
 	// Order the unit identified by `uid` to move to map cell (cellX, cellY).
 	static OrderResult Move(unsigned int uid, int cellX, int cellY);
 
-	// Spawn an InfantryClass or UnitClass of `typeName` (a rules.ini ID, e.g.
+	// Spawn an InfantryClass, UnitClass or BuildingClass of `typeName` (a rules.ini ID, e.g.
 	// "E1", "MTNK", "DEST"; a ship needs a water cell), owned
 	// by HouseClass::CurrentPlayer, unlimboed at map cell (cellX, cellY). On
 	// SpawnResult::Ok, `*outUid` receives the new object's
