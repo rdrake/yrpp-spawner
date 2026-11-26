@@ -31,6 +31,8 @@ public:
 
 	static char StringBuffer[0x1000];
 	static char FinalStringBuffer[0x1000];
+	// SPAWNERLOG=yes: append every Log line to SPAWNER.LOG in the game dir.
+	static void EnableFileLog();
 
 	static void Log(const char* pFormat, ...);
 	static void LogGame(const char* pFormat, ...);

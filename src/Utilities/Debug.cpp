@@ -21,12 +21,24 @@
 
 #include <Syringe.h>
 #include <cassert>
+#include <cstdio>
 #include <CRT.h>
 #include <MessageListClass.h>
 #include <Utilities/Macro.h>
 
 char Debug::StringBuffer[0x1000];
 char Debug::FinalStringBuffer[0x1000];
+
+namespace
+{
+	FILE* LogFile = nullptr;
+}
+
+void Debug::EnableFileLog()
+{
+	if (!LogFile)
+		LogFile = std::fopen("SPAWNER.LOG", "wt");
+}
 
 void Debug::Log(const char* pFormat, ...)
 {
@@ -35,6 +47,12 @@ void Debug::Log(const char* pFormat, ...)
 	vsprintf_s(FinalStringBuffer, pFormat, args);
 	LogGame("%s %s", "[Spawner]", FinalStringBuffer);
 	va_end(args);
+	// Flushed per line: wine.sh ends the round with `wineserver -k`.
+	if (LogFile)
+	{
+		std::fprintf(LogFile, "%s", FinalStringBuffer);
+		std::fflush(LogFile);
+	}
 }
 
 void Debug::LogGame(const char* pFormat, ...)

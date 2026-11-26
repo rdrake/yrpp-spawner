@@ -48,6 +48,9 @@ void MainConfig::LoadFromINIFile()
 	const char* pOptionsSection = "Options";
 	if (pINI->GetSection(pOptionsSection))
 	{
+		// First, so every Armed / NOT armed line below reaches the file.
+		if (pINI->ReadBool(pOptionsSection, "SPAWNERLOG", false))
+			Debug::EnableFileLog();
 		this->AllowChat            = pINI->ReadBool(pOptionsSection, "AllowChat", this->AllowChat);
 		this->AllowTaunts          = pINI->ReadBool(pOptionsSection, "AllowTaunts", this->AllowTaunts);
 		this->DDrawHandlesClose    = pINI->ReadBool(pOptionsSection, "DDrawHandlesClose", this->DDrawHandlesClose);
